@@ -1,0 +1,21 @@
+﻿{
+  "experiment": "E5",
+  "goal": "lane resume: fresh process + --conversation <id> + stream-json stdin",
+  "model": "gemini-3.8-flash-medium",
+  "effort": "medium",
+  "cwd": "<repo>\\design\\experiments\\ws-e5",
+  "seed": {
+    "kind": "result",
+    "conversationId": "60130978-b531-4983-a9e6-4437089e7657",
+    "response": "SEEDWORD42\n",
+    "compact": "{\"event\":\"result\",\"result\":{\"conversation_id\":\"60130978-b531-4983-a9e6-4437089e7657\",\"status\":\"SUCCESS\",\"response\":\"SEEDWORD42\\n\",\"duration_seconds\":19.7941543,\"num_turns\":1,\"usage\":{\"input_tokens\":19644,\"output_tokens\":616,\"thinking_tokens\":612,\"cache_read_tokens\":0,\"total_tokens\":20260}}}"
+  },
+  "resume": {
+    "kind": "result",
+    "conversationId": "60130978-b531-4983-a9e6-4437089e7657",
+    "response": "SEEDWORD42\n",
+    "compact": "{\"event\":\"result\",\"result\":{\"conversation_id\":\"60130978-b531-4983-a9e6-4437089e7657\",\"status\":\"SUCCESS\",\"response\":\"SEEDWORD42\\n\",\"duration_seconds\":45.3547862,\"num_turns\":2,\"usage\":{\"input_tokens\":23850,\"output_tokens\":670,\"thinking_tokens\":662,\"cache_read_tokens\":16374,\"total_tokens\":24520}}}"
+  },
+  "verdict": "RESUME_LANE_OK",
+  "resumeMatch": true
+}

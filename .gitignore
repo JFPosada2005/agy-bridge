@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+.env
+.env.*
+design/experiments/ws-*/
+.atl/
+# Private reasoning artifacts (untracked intentionally; kept local only)
+design/raw-thinking-opus.txt
+scripts/mine_reasoning.py

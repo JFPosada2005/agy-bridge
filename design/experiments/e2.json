@@ -1,0 +1,38 @@
+﻿{
+  "experiment": "E2",
+  "goal": "resume-by-id + cache continuity across process restarts (A-vs-B driver)",
+  "model": "gemini-3.6-flash-low",
+  "effort": "low",
+  "cwd": "<repo>\\design\\experiments\\ws-e7",
+  "expected_workspace_uri": "file:///C:/Users/<user>/Proyectos/Conexion%20Gemini%20CLI%20a%20OpenCode/design/experiments/ws-e7",
+  "live_requests_used": 2,
+  "verdict": "CORRECT",
+  "conversation_id": "b67b2253-3ff5-4144-965c-e9bfcb38a970",
+  "turn1": {
+    "exitCode": 0,
+    "conversationIdFromInit": "b67b2253-3ff5-4144-965c-e9bfcb38a970",
+    "text": "",
+    "usage": {
+      "input_tokens": 20902,
+      "cache_read_tokens": 0,
+      "output_tokens": 604,
+      "thinking_tokens": 520,
+      "total_tokens": 21506
+    },
+    "ms": 18567
+  },
+  "turn2": {
+    "exitCode": 0,
+    "text": "PINEAPPLE77\n",
+    "usage": {
+      "input_tokens": 26487,
+      "cache_read_tokens": 16296,
+      "output_tokens": 715,
+      "thinking_tokens": 626,
+      "total_tokens": 27202
+    },
+    "cache_read_tokens": 16296,
+    "input_tokens": 26487,
+    "ms": 18955
+  }
+}

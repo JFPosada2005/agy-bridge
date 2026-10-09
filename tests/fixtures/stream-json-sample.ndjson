@@ -1,0 +1,11 @@
+# SYNTHETIC fixture modeled on the real agy v1.3.1 stream-json event shapes
+# observed 2026-10-08 (kind key "event"; payloads nested under their kind key;
+# text in step_update.text_delta; answer in result.response; usage nested with
+# thinking_tokens). Hand-written, NOT captured bytes.
+Maya example lead line that is not JSON and must be skipped
+{"event":"init","conversation_id":"conv-synthetic-001","init":{"model":"gemini-3.6-flash","cwd":"C:\\proj","tools":["write_to_file"],"permission_mode":"request-review"}}
+{"event":"step_update","step_update":{"conversation_id":"conv-synthetic-001","step_index":0,"state":"DONE","step_type":"user_input"}}
+{"event":"step_update","step_update":{"conversation_id":"conv-synthetic-001","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"O"}}
+{"event":"step_update","step_update":{"conversation_id":"conv-synthetic-001","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"K"}}
+{"event":"step_update","step_update":{"conversation_id":"conv-synthetic-001","step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"\n","duration_seconds":1.7,"usage":{"input_tokens":12722,"output_tokens":108,"thinking_tokens":107,"cache_read_tokens":8152,"total_tokens":12830}}}
+{"event":"result","result":{"conversation_id":"conv-synthetic-001","status":"SUCCESS","response":"OK\n","duration_seconds":7.8,"num_turns":1,"usage":{"input_tokens":12722,"output_tokens":108,"thinking_tokens":107,"cache_read_tokens":8152,"total_tokens":12830}}}
