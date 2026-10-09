@@ -155,9 +155,12 @@ async function healthInfo(): Promise<HealthInfo> {
 }
 
 // ---------------------------------------------------------------------------
-// Portable registration (user standing directive): the plugin must be able to
-// make its models usable on ANY machine without manual opencode.json edits.
-// These defaults are injected from the `config` hook on every opencode init.
+// Portable registration (user standing directive): the plugin must register
+// agy-bridge as just another provider — provider entry plus its models — on
+// ANY machine, without manual opencode.json edits. It deliberately does NOT
+// inject agent definitions or workflow assumptions: using a model as a
+// subagent is opencode's native mechanism (spawned agents inherit the
+// session model, and users bind their own agents to any provider they like).
 // opencode deep-merges configs, and every entry is only added when the user
 // has not defined it herself — her own overrides are never clobbered.
 // ---------------------------------------------------------------------------
@@ -182,55 +185,8 @@ const AGY_MODELS: Record<string, { name: string; context: number; output: number
   "gpt-oss-120b-medium": { name: "GPT-OSS 120B (Medium)", context: 200_000, output: 32_768 },
 }
 
-// Ready-to-spawn subagents bound to the provider, so a fresh install can
-// immediately dispatch work to an agy model via `task` without editing
-// opencode.json. `task` is denied on all three: the delegation boundary says
-// agy does the work itself, never spawning further subagents (defense in
-// depth on top of the bridge-side tool masking).
-const AGY_AGENTS: Record<
-  string,
-  { description: string; mode: string; model: string; permission: Record<string, string>; prompt: string }
-> = {
-  "agy-worker": {
-    description:
-      "Focused implementation subagent on the local agy bridge (Gemini 3.8 Flash low). Spawned via task.",
-    mode: "subagent",
-    model: "gemini-3.8-flash-low",
-    permission: { task: "deny" },
-    prompt:
-      "You are agy-worker, a focused implementation subagent powered by the local agy bridge. " +
-      "Complete the delegated task end to end with the tools provided, then return a concise " +
-      "summary of the outcome, files touched, and anything left incomplete. Never launch " +
-      "subagents: the task tool is denied and the bridge blocks it by design; perform the work " +
-      "yourself inline.",
-  },
-  "agy-general": {
-    description:
-      "General-purpose agy subagent on the local agy bridge (Gemini 3.1 Pro high reasoning). Spawned via task.",
-    mode: "subagent",
-    model: "gemini-3.1-pro-high",
-    permission: { task: "deny" },
-    prompt:
-      "You are agy-general, a general-purpose subagent powered by the local agy bridge. Follow " +
-      "multi-step instructions carefully, verify your work when the task names verification " +
-      "steps, and return a concise structured summary. Never launch subagents: the task tool " +
-      "is denied and the bridge blocks it by design; perform the work yourself inline.",
-  },
-  "agy-explore": {
-    description:
-      "Read-only exploration subagent on the local agy bridge (Gemini 3.8 Flash low). Spawned via task.",
-    mode: "subagent",
-    model: "gemini-3.8-flash-low",
-    permission: { bash: "deny", edit: "deny", task: "deny", write: "deny" },
-    prompt:
-      "You are agy-explore, a read-only explorer powered by the local agy bridge. Map relevant " +
-      "files, symbols, and relationships within the parent-provided scope using read, glob, " +
-      "and search tools only. Do not edit, write, or run mutating commands. Return a compressed " +
-      "handoff with supporting paths and observed evidence; never claim evidence you did not " +
-      "observe. Never launch subagents: the task tool is denied and the bridge blocks it by " +
-      "design.",
-  },
-}
+// Ready-to-spawn subagents stay out of the plugin on purpose (see the
+// portable registration note above).
 
 export default (async () => {
   const clientInstanceId = newClientInstanceId()
@@ -290,15 +246,13 @@ export default (async () => {
   }
 
   return {
-    // Portable registration of provider + agents (see AGY_MODELS/AGY_AGENTS).
-    // Mutate in place; add-only: a user's own provider/agent entries win.
+    // Portable provider registration (see AGY_MODELS). Mutate in place;
+    // add-only: a user's own provider entries are never clobbered.
     config: (cfg) => {
       try {
-        const typed = cfg as { provider?: Record<string, unknown>; agent?: Record<string, unknown> }
+        const typed = cfg as { provider?: Record<string, unknown> }
         if (!typed.provider || typeof typed.provider !== "object") typed.provider = {}
-        if (!typed.agent || typeof typed.agent !== "object") typed.agent = {}
         const providers = typed.provider
-        const agents = typed.agent
 
         const existingProvider = providers[AGY_PROVIDER_ID]
         const providerBlock =
@@ -325,18 +279,6 @@ export default (async () => {
         }
         providerBlock.models = models
         providers[AGY_PROVIDER_ID] = providerBlock
-
-        for (const [name, def] of Object.entries(AGY_AGENTS)) {
-          if (!agents[name]) {
-            agents[name] = {
-              description: def.description,
-              mode: def.mode,
-              model: `${AGY_PROVIDER_ID}/${def.model}`,
-              permission: { ...def.permission },
-              prompt: def.prompt,
-            }
-          }
-        }
       } catch {
         // Never break opencode from the config hook.
       }

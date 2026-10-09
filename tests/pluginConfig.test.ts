@@ -7,7 +7,8 @@ import { join } from "node:path"
 // it into vitest these are structural assertions over the canonical source.
 // Behavioral verification happens on an opencode restart (config merge).
 // Proportionate check: the runtime paths this file guards are the hook
-// registration itself, the model/agent surface, and the add-only guards.
+// registration itself, the provider/model surface, the add-only guards, and
+// the provider-only scope (no injected agents).
 
 const src = readFileSync(
   join(fileURLToPath(import.meta.url), "..", "..", "plugins", "agy-bridge.ts"),
@@ -46,19 +47,16 @@ describe("agy-bridge plugin portable registration", () => {
     }
   })
 
-  it("declares the three ready-to-spawn agy subagents", () => {
-    for (const id of ["agy-worker", "agy-general", "agy-explore"]) {
-      expect(src, `missing AGY_AGENTS entry: ${id}`).toContain(`"${id}"`)
-    }
-  })
-
-  it("denies the task tool on every agy subagent (delegation boundary)", () => {
-    expect(src).toContain('task: "deny"')
+  it("injects the provider as just another provider (no agents, no harness assumptions)", () => {
+    expect(src).not.toContain("agy-worker")
+    expect(src).not.toContain("agy-general")
+    expect(src).not.toContain("agy-explore")
+    expect(src).not.toContain("AGY_AGENTS")
+    expect(src).not.toContain("permission:")
   })
 
   it("keeps user overrides intact (add-only guards)", () => {
     expect(src).toContain("options.baseURL === undefined")
-    expect(src).toContain("if (!agents[name])")
     expect(src).toContain("if (!models[id])")
   })
 })
