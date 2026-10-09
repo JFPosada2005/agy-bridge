@@ -167,22 +167,31 @@ async function healthInfo(): Promise<HealthInfo> {
 
 // Mirrors the user's proven global provider block so a fresh install matches
 // the same model surface the daemon exposes (ids are the bridge's
-// task/model registry contract).
+// task/model registry contract). Limits are the models' documented real
+// specs, not invented defaults:
+// - Gemini 3.x (Flash 3.6/3.7/3.8, Pro 3.1): context 1,048,576, output 65,536
+//   (ai.google.dev + docs.cloud.google.com model pages, GA 2026).
+// - Claude Sonnet 4.6 / Opus 4.6: 1M context (beta) / 128k output
+//   (anthropic.com model announcements; claude platform docs).
+//   Antigravity hosting may gate 1M behind its own tier; the user's own
+//   opencode.json entry overrides these numbers (add-only injection).
+// - GPT-OSS-120b: context 131,072, output 131,072 (developers.openai.com
+//   model page).
 const AGY_MODELS: Record<string, { name: string; context: number; output: number }> = {
-  "gemini-3.1-pro-high": { name: "Gemini 3.1 Pro (High)", context: 1_000_000, output: 65_536 },
-  "gemini-3.1-pro-low": { name: "Gemini 3.1 Pro (Low)", context: 1_000_000, output: 65_536 },
-  "gemini-3.8-flash-high": { name: "Gemini 3.8 Flash (High)", context: 1_000_000, output: 65_536 },
-  "gemini-3.8-flash-medium": { name: "Gemini 3.8 Flash (Medium)", context: 1_000_000, output: 65_536 },
-  "gemini-3.8-flash-low": { name: "Gemini 3.8 Flash (Low)", context: 1_000_000, output: 65_536 },
-  "gemini-3.7-flash-high": { name: "Gemini 3.7 Flash (High)", context: 1_000_000, output: 65_536 },
-  "gemini-3.7-flash-medium": { name: "Gemini 3.7 Flash (Medium)", context: 1_000_000, output: 65_536 },
-  "gemini-3.7-flash-low": { name: "Gemini 3.7 Flash (Low)", context: 1_000_000, output: 65_536 },
-  "gemini-3.6-flash-high": { name: "Gemini 3.6 Flash (High)", context: 1_000_000, output: 65_536 },
-  "gemini-3.6-flash-medium": { name: "Gemini 3.6 Flash (Medium)", context: 1_000_000, output: 65_536 },
-  "gemini-3.6-flash-low": { name: "Gemini 3.6 Flash (Low)", context: 1_000_000, output: 65_536 },
-  "claude-sonnet-4-6": { name: "Claude Sonnet 4.6 (Thinking)", context: 200_000, output: 32_768 },
-  "claude-opus-4-6-thinking": { name: "Claude Opus 4.6 (Thinking)", context: 200_000, output: 32_768 },
-  "gpt-oss-120b-medium": { name: "GPT-OSS 120B (Medium)", context: 200_000, output: 32_768 },
+  "gemini-3.1-pro-high": { name: "Gemini 3.1 Pro (High)", context: 1_048_576, output: 65_536 },
+  "gemini-3.1-pro-low": { name: "Gemini 3.1 Pro (Low)", context: 1_048_576, output: 65_536 },
+  "gemini-3.8-flash-high": { name: "Gemini 3.8 Flash (High)", context: 1_048_576, output: 65_536 },
+  "gemini-3.8-flash-medium": { name: "Gemini 3.8 Flash (Medium)", context: 1_048_576, output: 65_536 },
+  "gemini-3.8-flash-low": { name: "Gemini 3.8 Flash (Low)", context: 1_048_576, output: 65_536 },
+  "gemini-3.7-flash-high": { name: "Gemini 3.7 Flash (High)", context: 1_048_576, output: 65_536 },
+  "gemini-3.7-flash-medium": { name: "Gemini 3.7 Flash (Medium)", context: 1_048_576, output: 65_536 },
+  "gemini-3.7-flash-low": { name: "Gemini 3.7 Flash (Low)", context: 1_048_576, output: 65_536 },
+  "gemini-3.6-flash-high": { name: "Gemini 3.6 Flash (High)", context: 1_048_576, output: 65_536 },
+  "gemini-3.6-flash-medium": { name: "Gemini 3.6 Flash (Medium)", context: 1_048_576, output: 65_536 },
+  "gemini-3.6-flash-low": { name: "Gemini 3.6 Flash (Low)", context: 1_048_576, output: 65_536 },
+  "claude-sonnet-4-6": { name: "Claude Sonnet 4.6 (Thinking)", context: 1_000_000, output: 128_000 },
+  "claude-opus-4-6-thinking": { name: "Claude Opus 4.6 (Thinking)", context: 1_000_000, output: 128_000 },
+  "gpt-oss-120b-medium": { name: "GPT-OSS 120B (Medium)", context: 131_072, output: 131_072 },
 }
 
 // Ready-to-spawn subagents stay out of the plugin on purpose (see the
