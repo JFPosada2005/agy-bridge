@@ -17,6 +17,9 @@
 import type { Plugin } from "@opencode-ai/plugin"
 
 const HEALTH_URL = "http://127.0.0.1:41667/healthz"
+// Default OpenAI-compatible base URL the daemon serves. Used by the portable
+// provider registration below; a user-defined provider entry keeps its own.
+const AGY_BASE_URL_DEFAULT = "http://127.0.0.1:41667/v1"
 // Deployment-scoped: resolved from environment first — the user's checkout
 // path NEVER lives in tracked source. Set AGY_BRIDGE_REPO on machines whose
 // clone lives elsewhere; fallback is the standard LOCALAPPDATA install spot.
@@ -151,6 +154,84 @@ async function healthInfo(): Promise<HealthInfo> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Portable registration (user standing directive): the plugin must be able to
+// make its models usable on ANY machine without manual opencode.json edits.
+// These defaults are injected from the `config` hook on every opencode init.
+// opencode deep-merges configs, and every entry is only added when the user
+// has not defined it herself — her own overrides are never clobbered.
+// ---------------------------------------------------------------------------
+
+// Mirrors the user's proven global provider block so a fresh install matches
+// the same model surface the daemon exposes (ids are the bridge's
+// task/model registry contract).
+const AGY_MODELS: Record<string, { name: string; context: number; output: number }> = {
+  "gemini-3.1-pro-high": { name: "Gemini 3.1 Pro (High)", context: 1_000_000, output: 65_536 },
+  "gemini-3.1-pro-low": { name: "Gemini 3.1 Pro (Low)", context: 1_000_000, output: 65_536 },
+  "gemini-3.8-flash-high": { name: "Gemini 3.8 Flash (High)", context: 1_000_000, output: 65_536 },
+  "gemini-3.8-flash-medium": { name: "Gemini 3.8 Flash (Medium)", context: 1_000_000, output: 65_536 },
+  "gemini-3.8-flash-low": { name: "Gemini 3.8 Flash (Low)", context: 1_000_000, output: 65_536 },
+  "gemini-3.7-flash-high": { name: "Gemini 3.7 Flash (High)", context: 1_000_000, output: 65_536 },
+  "gemini-3.7-flash-medium": { name: "Gemini 3.7 Flash (Medium)", context: 1_000_000, output: 65_536 },
+  "gemini-3.7-flash-low": { name: "Gemini 3.7 Flash (Low)", context: 1_000_000, output: 65_536 },
+  "gemini-3.6-flash-high": { name: "Gemini 3.6 Flash (High)", context: 1_000_000, output: 65_536 },
+  "gemini-3.6-flash-medium": { name: "Gemini 3.6 Flash (Medium)", context: 1_000_000, output: 65_536 },
+  "gemini-3.6-flash-low": { name: "Gemini 3.6 Flash (Low)", context: 1_000_000, output: 65_536 },
+  "claude-sonnet-4-6": { name: "Claude Sonnet 4.6 (Thinking)", context: 200_000, output: 32_768 },
+  "claude-opus-4-6-thinking": { name: "Claude Opus 4.6 (Thinking)", context: 200_000, output: 32_768 },
+  "gpt-oss-120b-medium": { name: "GPT-OSS 120B (Medium)", context: 200_000, output: 32_768 },
+}
+
+// Ready-to-spawn subagents bound to the provider, so a fresh install can
+// immediately dispatch work to an agy model via `task` without editing
+// opencode.json. `task` is denied on all three: the delegation boundary says
+// agy does the work itself, never spawning further subagents (defense in
+// depth on top of the bridge-side tool masking).
+const AGY_AGENTS: Record<
+  string,
+  { description: string; mode: string; model: string; permission: Record<string, string>; prompt: string }
+> = {
+  "agy-worker": {
+    description:
+      "Focused implementation subagent on the local agy bridge (Gemini 3.8 Flash low). Spawned via task.",
+    mode: "subagent",
+    model: "gemini-3.8-flash-low",
+    permission: { task: "deny" },
+    prompt:
+      "You are agy-worker, a focused implementation subagent powered by the local agy bridge. " +
+      "Complete the delegated task end to end with the tools provided, then return a concise " +
+      "summary of the outcome, files touched, and anything left incomplete. Never launch " +
+      "subagents: the task tool is denied and the bridge blocks it by design; perform the work " +
+      "yourself inline.",
+  },
+  "agy-general": {
+    description:
+      "General-purpose agy subagent on the local agy bridge (Gemini 3.1 Pro high reasoning). Spawned via task.",
+    mode: "subagent",
+    model: "gemini-3.1-pro-high",
+    permission: { task: "deny" },
+    prompt:
+      "You are agy-general, a general-purpose subagent powered by the local agy bridge. Follow " +
+      "multi-step instructions carefully, verify your work when the task names verification " +
+      "steps, and return a concise structured summary. Never launch subagents: the task tool " +
+      "is denied and the bridge blocks it by design; perform the work yourself inline.",
+  },
+  "agy-explore": {
+    description:
+      "Read-only exploration subagent on the local agy bridge (Gemini 3.8 Flash low). Spawned via task.",
+    mode: "subagent",
+    model: "gemini-3.8-flash-low",
+    permission: { bash: "deny", edit: "deny", task: "deny", write: "deny" },
+    prompt:
+      "You are agy-explore, a read-only explorer powered by the local agy bridge. Map relevant " +
+      "files, symbols, and relationships within the parent-provided scope using read, glob, " +
+      "and search tools only. Do not edit, write, or run mutating commands. Return a compressed " +
+      "handoff with supporting paths and observed evidence; never claim evidence you did not " +
+      "observe. Never launch subagents: the task tool is denied and the bridge blocks it by " +
+      "design.",
+  },
+}
+
 export default (async () => {
   const clientInstanceId = newClientInstanceId()
   const parentBySession = new Map<string, string>()
@@ -209,6 +290,57 @@ export default (async () => {
   }
 
   return {
+    // Portable registration of provider + agents (see AGY_MODELS/AGY_AGENTS).
+    // Mutate in place; add-only: a user's own provider/agent entries win.
+    config: (cfg) => {
+      try {
+        const typed = cfg as { provider?: Record<string, unknown>; agent?: Record<string, unknown> }
+        if (!typed.provider || typeof typed.provider !== "object") typed.provider = {}
+        if (!typed.agent || typeof typed.agent !== "object") typed.agent = {}
+        const providers = typed.provider
+        const agents = typed.agent
+
+        const existingProvider = providers[AGY_PROVIDER_ID]
+        const providerBlock =
+          existingProvider && typeof existingProvider === "object"
+            ? (existingProvider as Record<string, unknown>)
+            : {}
+        if (!providerBlock.npm) providerBlock.npm = "@ai-sdk/openai-compatible"
+        if (!providerBlock.name) providerBlock.name = "Antigravity (agy local)"
+        const options =
+          providerBlock.options && typeof providerBlock.options === "object"
+            ? (providerBlock.options as Record<string, unknown>)
+            : {}
+        // Add-only: don't clobber a user-set baseURL.
+        if (options.baseURL === undefined) options.baseURL = AGY_BASE_URL_DEFAULT
+        providerBlock.options = options
+        const models =
+          providerBlock.models && typeof providerBlock.models === "object"
+            ? (providerBlock.models as Record<string, unknown>)
+            : {}
+        for (const [id, m] of Object.entries(AGY_MODELS)) {
+          if (!models[id]) {
+            models[id] = { name: m.name, limit: { context: m.context, output: m.output } }
+          }
+        }
+        providerBlock.models = models
+        providers[AGY_PROVIDER_ID] = providerBlock
+
+        for (const [name, def] of Object.entries(AGY_AGENTS)) {
+          if (!agents[name]) {
+            agents[name] = {
+              description: def.description,
+              mode: def.mode,
+              model: `${AGY_PROVIDER_ID}/${def.model}`,
+              permission: { ...def.permission },
+              prompt: def.prompt,
+            }
+          }
+        }
+      } catch {
+        // Never break opencode from the config hook.
+      }
+    },
     // Track parent linkage from observed session events (fast, in-memory).
     // Absent parent means omit the header; never throw.
     event: async (input) => {
