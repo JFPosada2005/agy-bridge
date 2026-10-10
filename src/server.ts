@@ -44,6 +44,7 @@ import {
   ensureWorkspaceDir,
   agyBridgeHome,
   getBootId,
+  isValidSessionId,
   loadSessionRecord,
   saveSessionRecord,
   sessionsDir,
@@ -1061,6 +1062,11 @@ export function buildApp(options: BridgeOptions = {}): FastifyInstance {
     if (!sessionId || sessionId === '-') {
       return reply.code(400).send(errorBody('sessionId is required', 'invalid_request'));
     }
+    if (!isValidSessionId(sessionId)) {
+      return reply
+        .code(400)
+        .send(errorBody('sessionId has an invalid format', 'invalid_session_id', 'invalid_request_error'));
+    }
     const record = loadSessionRecord(sessionId);
     if (record.branches.length === 0 && record.inflightMarkers.length === 0) {
       // Never bridged: nothing to tombstone.
@@ -1149,6 +1155,20 @@ export function buildApp(options: BridgeOptions = {}): FastifyInstance {
       (request.headers ?? {}) as Record<string, unknown>,
     );
     const chatPath = '/v1/chat/completions';
+    // Session ids become file names in the session store: reject anything
+    // that is not an opaque id before it reaches the filesystem ('-' means
+    // "header absent").
+    for (const [header, value] of [
+      ['x-agy-session-id', chatIdentity.sessionId],
+      ['x-agy-parent-session-id', chatIdentity.parentSessionId],
+    ] as const) {
+      if (value !== '-' && !isValidSessionId(value)) {
+        logBridgeLine('POST', chatPath, 400, '<invalid>', chatIdentity.agent, chatIdentity.msgId, 'err=invalid_session_id');
+        return reply
+          .code(400)
+          .send(errorBody(`${header} has an invalid format`, 'invalid_session_id', 'invalid_request_error'));
+      }
+    }
     const requestedModel = typeof body['model'] === 'string' ? body['model'] : '';
     if (!requestedModel) {
       logBridgeLine(

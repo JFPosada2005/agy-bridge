@@ -98,8 +98,40 @@ export function workspaceBaseDir(): string {
   return path.join(agyBridgeHome(), 'workspace');
 }
 
-function recordPath(sessionID: string): string {
-  return path.join(sessionsDir(), `${sessionID}.json`);
+/**
+ * Session ids arrive from HTTP (x-agy-session-id / x-agy-parent-session-id
+ * headers and the tombstone body) and become file names under sessionsDir().
+ * Only opaque ids are accepted (opencode sends `ses_...`): letters, digits,
+ * `_` and `-`, 1..128 chars. Anything else (`..`, `/`, `\`, drive letters,
+ * dots) is rejected BEFORE any filesystem access — otherwise a crafted id
+ * could rename (quarantine) or overwrite `.json` files outside the store.
+ */
+export const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
+export function isValidSessionId(id: unknown): id is string {
+  return typeof id === 'string' && SESSION_ID_PATTERN.test(id);
+}
+
+/** Log-safe rendering of an untrusted id (no newlines, bounded length). */
+function describeId(id: unknown): string {
+  return JSON.stringify(String(id).slice(0, 80));
+}
+
+/**
+ * Record file for a session, or null when the id is invalid. Defense in
+ * depth: even a valid-looking id must resolve to a file directly inside
+ * sessionsDir().
+ */
+function recordPath(sessionID: string): string | null {
+  if (!isValidSessionId(sessionID)) {
+    return null;
+  }
+  const base = path.resolve(sessionsDir());
+  const file = path.resolve(base, `${sessionID}.json`);
+  if (path.dirname(file) !== base) {
+    return null;
+  }
+  return file;
 }
 
 export function newBranchID(): string {
@@ -142,6 +174,10 @@ function looksLikeSessionRecord(value: unknown): value is SessionRecord {
  */
 export function loadSessionRecord(sessionID: string): SessionRecord {
   const file = recordPath(sessionID);
+  if (!file) {
+    loud(`refusing invalid session id ${describeId(sessionID)}; using fresh in-memory record (nothing read)`);
+    return freshSessionRecord(sessionID);
+  }
   let raw: string;
   try {
     raw = fs.readFileSync(file, 'utf8');
@@ -186,6 +222,10 @@ export function loadSessionRecord(sessionID: string): SessionRecord {
  */
 export function saveSessionRecord(record: SessionRecord): void {
   const file = recordPath(record.sessionID);
+  if (!file) {
+    loud(`refusing to persist invalid session id ${describeId(record.sessionID)} (nothing written)`);
+    return;
+  }
   try {
     record.updatedAt = new Date().toISOString();
     fs.mkdirSync(path.dirname(file), { recursive: true });
