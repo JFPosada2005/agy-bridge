@@ -180,7 +180,49 @@ try {
     }
     Write-Host "Registered AGY_BRIDGE_NODE=$NodeExe for the current user."
 
-    # --- 8. Summary ---
+    # --- 8. Stale-daemon retirement (upgrade path only) ---
+    # A daemon still serving the OLD build blocks the new one forever: the new
+    # plugin verifies an HMAC identity proof before killing a pid, and the old
+    # daemon cannot answer it. The installer must retire it — but SAFELY:
+    # never act on the pid alone (finding F3: a squatter on the port can
+    # report any pid). First validate the process IS this repo's own node
+    # daemon (name + command line), then stop it only when no turn is in
+    # flight. If anything does not match, tell the user and leave it alone.
+    try {
+        $health = $null
+        try {
+            $health = Invoke-RestMethod http://127.0.0.1:41667/healthz -TimeoutSec 3
+        } catch {
+            # No daemon running: nothing to retire (fresh install path).
+        }
+        if ($health -and $health.pid) {
+            $proc = Get-Process -Id $health.pid -ErrorAction SilentlyContinue
+            $procName = $null
+            $cmdLine = $null
+            if ($proc) {
+                $procName = $proc.ProcessName
+                $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId=$($health.pid)" -ErrorAction SilentlyContinue).CommandLine
+            }
+            $isOurs = ($proc -and $procName -eq "node" -and
+                       $cmdLine -and $cmdLine -match "dist\\index\.js" -and
+                       $cmdLine -match [regex]::Escape($RepoRoot))
+            if (-not $isOurs) {
+                Write-Host "WARNING: port 41667 is held by something that is not this repo's daemon (pid $($health.pid)). Close it manually if it is old, then restart opencode."
+            }
+            elseif ($health.inflight -gt 0) {
+                Write-Host "A turn is in flight on the old daemon; it will be retired by the plugin watchdog after the last turn finishes. Just restart opencode when convenient."
+            }
+            else {
+                Stop-Process -Id $health.pid -ErrorAction SilentlyContinue
+                Write-Host "Retired the previous daemon (pid $($health.pid)); the new one starts with opencode or its watchdog."
+            }
+        }
+    } catch {
+        # Retirement is best-effort; never fail the install because of it.
+        Write-Host "Could not inspect the running daemon (non-fatal): $($_.Exception.Message)"
+    }
+
+    # --- 9. Summary ---
     Write-Host ""
     Write-Host "agy-bridge install complete."
     Write-Host "Repo: $RepoRoot"
