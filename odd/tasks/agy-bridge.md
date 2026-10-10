@@ -290,7 +290,7 @@ through its official documented flags — never touching OAuth tokens.
   persistent process cannot resume an existing conversation. sessionModelOptions
   refreshed per turn for lane spawn info. destroyAllWarmLanes() wired in the
   daemon shutdown. Stats route exposes warmLanes {lanes, keys[]}.
-- Bounds: AGY_WARM_LANE=1 (default OFF pending user decision), AGY_TURN_MAX_MS
+- Bounds: AGY_WARM_LANE=0 opts out (default ON since user production validation), AGY_TURN_MAX_MS
   default 15 MIN (user decision: flash models think in seconds; in-flight turns
   are NEVER evicted by the idle timer), AGY_WARM_IDLE_MS default 10 min,
   AGY_MAX_WARM_LANES default 8.

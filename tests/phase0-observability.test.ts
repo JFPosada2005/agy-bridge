@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { collectTurn, extractUsage, toOpenAIUsage } from '../src/agy';
 import { buildApp } from '../src/server';
+import { agyBridgeHome } from '../src/sessionStore';
 
 const MODEL = 'gemini-3.6-flash-low';
 // Warm-lane pin: Option A semantics only in this file (see
@@ -187,5 +188,24 @@ describe('request logger file (AGY_BRIDGE_LOG)', () => {
     });
     expect(chat.statusCode).toBe(200);
     await app.close();
+  });
+
+  it('defaults the file target to the agy-bridge home when env is unset', async () => {
+    delete process.env.AGY_BRIDGE_LOG;
+    const app = buildApp({
+      adapter: { runTurn: () => Promise.resolve({ text: 'OK', usage: null }) },
+    });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/__debug/echo',
+      headers: { 'x-agy-session-id': 'ses-default-1' },
+    });
+    expect(response.statusCode).toBe(200);
+    await app.close();
+    // Same HOME convention the session store uses (AGY_BRIDGE_HOME wins), so
+    // per-test isolation holds and the real user home is never touched.
+    const defaultPath = join(agyBridgeHome(), 'bridge.log');
+    const content = readFileSync(defaultPath, 'utf8');
+    expect(content).toContain('sessionId=ses-default-1');
   });
 });

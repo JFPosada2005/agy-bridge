@@ -42,6 +42,7 @@ import {
 } from './sessionManager';
 import {
   ensureWorkspaceDir,
+  agyBridgeHome,
   getBootId,
   loadSessionRecord,
   saveSessionRecord,
@@ -64,14 +65,21 @@ export function destroyAllWarmLanes(): void {
 export const DEFAULT_PORT = 41667;
 export const MAX_CONCURRENT_TURNS = 3;
 
-// Phase 0 observability: single-line request logger (console + optional file).
-// File target comes from AGY_BRIDGE_LOG; parent dir is created on first use.
-// Append-only, UTF-8 without BOM. Never throws.
+// Phase 0 observability: single-line request logger (console + file).
+// Same portable telemetry contract on every machine:
+// - AGY_BRIDGE_LOG wins when set (the opencode plugin always sets it).
+// - Otherwise the file defaults to <agy-bridge-home>/bridge.log (same HOME
+//   convention as the session store), so a manual `npm run start` without
+//   env vars still lands file logs where users expect them.
+// Parent dir is created on first use. Append-only, UTF-8 without BOM.
+// console.error stays first: stderr keeps working even if the file write fails.
+// Never throws.
 let bridgeLogDirEnsuredFor: string | null = null;
 
 function bridgeLogFile(): string | null {
   const raw = process.env.AGY_BRIDGE_LOG?.trim();
-  return raw ? raw : null;
+  if (raw) return raw;
+  return path.join(agyBridgeHome(), 'bridge.log');
 }
 
 function appendBridgeLog(line: string): void {
@@ -924,7 +932,8 @@ export function buildApp(options: BridgeOptions = {}): FastifyInstance {
   const app = Fastify({ logger: false });
   let adapter = options.adapter ?? defaultAdapter;
 
-  // T18 warm lane: when AGY_WARM_LANE=1, wrap the adapter — session-keyed
+  // T18 warm lane: by default ON (AGY_WARM_LANE=0 opts out), wrap the
+  // adapter — session-keyed
   // persistent processes first, transparent Option A fallback on any
   // anomaly (null return or thrown error). Legacy/ephemeral turns (no
   // sessionID) always go to the base adapter.
