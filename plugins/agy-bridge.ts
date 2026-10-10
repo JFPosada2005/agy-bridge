@@ -16,10 +16,20 @@
 // The hook never throws, never awaits network, and returns fast.
 import type { Plugin } from "@opencode-ai/plugin"
 
-const HEALTH_URL = "http://127.0.0.1:41667/healthz"
+// Same AGY_BRIDGE_PORT contract as the daemon (src/index.ts), so the port
+// can be moved if another program ever holds 41667.
+const BRIDGE_PORT = Number(process.env.AGY_BRIDGE_PORT ?? "") || 41667
+const BRIDGE_ORIGIN = `http://127.0.0.1:${BRIDGE_PORT}`
+const HEALTH_URL = `${BRIDGE_ORIGIN}/healthz`
 // Default OpenAI-compatible base URL the daemon serves. Used by the portable
 // provider registration below; a user-defined provider entry keeps its own.
-const AGY_BASE_URL_DEFAULT = "http://127.0.0.1:41667/v1"
+const AGY_BASE_URL_DEFAULT = `${BRIDGE_ORIGIN}/v1`
+// Install token shared with the daemon (src/security.ts). Sent ONLY after
+// the listener proved it knows the same token (HMAC over a fresh nonce).
+const TOKEN_HEADER = "x-agy-token"
+let currentToken: string | null = null
+let daemonVerified = false
+let impostorWarned = false
 // Deployment-scoped: resolved from environment first — the user's checkout
 // path NEVER lives in tracked source. Set AGY_BRIDGE_REPO on machines whose
 // clone lives elsewhere; fallback is the standard LOCALAPPDATA install spot.
@@ -50,6 +60,77 @@ function bridgeLogPath(): string | null {
   } catch {
     return null
   }
+}
+
+// Same home convention as the daemon: AGY_BRIDGE_HOME wins, else ~/.agy-bridge.
+function bridgeHomeDir(): string | null {
+  const override = process.env.AGY_BRIDGE_HOME?.trim()
+  if (override) return override
+  const home = process.env.USERPROFILE || process.env.HOME || ""
+  if (!home) return null
+  const sep = home.endsWith("\\") || home.endsWith("/") ? "" : "\\"
+  return `${home}${sep}.agy-bridge`
+}
+
+const TOKEN_PATTERN = /^[0-9a-f]{64}$/
+
+/**
+ * Same algorithm as loadOrCreateToken in src/security.ts: read
+ * <home>/token, or create it exclusively (`wx`, 0600) so the plugin and the
+ * daemon never disagree. Returns null (no token sent) on any failure.
+ */
+async function loadOrCreateToken(): Promise<string | null> {
+  try {
+    const home = bridgeHomeDir()
+    if (!home) return null
+    const fs = await import("node:fs")
+    const path = await import("node:path")
+    const { randomBytes } = await import("node:crypto")
+    const file = path.join(home, "token")
+    try {
+      const existing = fs.readFileSync(file, "utf8").trim()
+      if (TOKEN_PATTERN.test(existing)) return existing
+    } catch {
+      // Missing: create below.
+    }
+    fs.mkdirSync(home, { recursive: true })
+    const token = randomBytes(32).toString("hex")
+    try {
+      fs.writeFileSync(file, token, { encoding: "utf8", mode: 0o600, flag: "wx" })
+      return token
+    } catch {
+      // Lost the race with the daemon, or a malformed file exists (the
+      // daemon replaces it on start): use whatever valid token is there.
+      const again = fs.readFileSync(file, "utf8").trim()
+      return TOKEN_PATTERN.test(again) ? again : null
+    }
+  } catch {
+    return null
+  }
+}
+
+// Keep the "agy-bridge-health:" prefix identical to healthProof in src/security.ts.
+async function expectedProof(token: string, nonce: string): Promise<string> {
+  const { createHmac } = await import("node:crypto")
+  return createHmac("sha256", token).update(`agy-bridge-health:${nonce}`).digest("hex")
+}
+
+async function safeEqual(a: string, b: string): Promise<boolean> {
+  const { timingSafeEqual } = await import("node:crypto")
+  const left = Buffer.from(a, "utf8")
+  const right = Buffer.from(b, "utf8")
+  return left.length === right.length && timingSafeEqual(left, right)
+}
+
+function warnImpostorOnce(): void {
+  if (impostorWarned) return
+  impostorWarned = true
+  console.error(
+    `[agy-bridge] ${BRIDGE_ORIGIN} is answering but could not prove it is your agy-bridge daemon. ` +
+      "Not killing it and not sending your token. If you just upgraded agy-bridge, stop the old " +
+      "daemon once; otherwise check which program holds the port " +
+      `(Get-NetTCPConnection -LocalPort ${BRIDGE_PORT}) or set AGY_BRIDGE_PORT.`,
+  )
 }
 
 async function ensureBridgeLogDir(logPath: string | null): Promise<void> {
@@ -83,8 +164,10 @@ const spawnDaemon = async (logPath: string | null): Promise<boolean> => {
     })
     for (let i = 0; i < 40; i++) {
       await new Promise((resolve) => setTimeout(resolve, 250))
-      if (await healthy()) {
-        console.error("[agy-bridge] daemon started on 127.0.0.1:41667")
+      if (!currentToken) currentToken = await loadOrCreateToken()
+      if ((await healthInfo(currentToken)).verified) {
+        daemonVerified = true
+        console.error(`[agy-bridge] daemon started on ${BRIDGE_ORIGIN}`)
         return true
       }
     }
@@ -93,15 +176,6 @@ const spawnDaemon = async (logPath: string | null): Promise<boolean> => {
     console.error("[agy-bridge] daemon bootstrap failed:", error)
   }
   return false
-}
-
-async function healthy(): Promise<boolean> {
-  try {
-    const res = await fetch(HEALTH_URL, { signal: AbortSignal.timeout(2000) })
-    return res.ok
-  } catch {
-    return false
-  }
 }
 
 /**
@@ -133,24 +207,40 @@ async function expectedBuildId(): Promise<string | null> {
 
 interface HealthInfo {
   ok: boolean
+  /** True only when the listener proved it knows the install token. */
+  verified: boolean
   buildId?: string
   pid?: number
   inflight?: number
 }
 
-async function healthInfo(): Promise<HealthInfo> {
+// The token is NEVER sent here: the listener may be any program holding the
+// port. It must answer HMAC(token, nonce) for a fresh nonce instead.
+async function healthInfo(token: string | null): Promise<HealthInfo> {
   try {
-    const res = await fetch(HEALTH_URL, { signal: AbortSignal.timeout(2000) })
-    if (!res.ok) return { ok: false }
-    const body = (await res.json()) as { buildId?: string; pid?: number; inflight?: number }
+    const { randomBytes } = await import("node:crypto")
+    const nonce = randomBytes(16).toString("hex")
+    const res = await fetch(`${HEALTH_URL}?nonce=${nonce}`, { signal: AbortSignal.timeout(2000) })
+    if (!res.ok) return { ok: false, verified: false }
+    const body = (await res.json()) as {
+      buildId?: string
+      pid?: number
+      inflight?: number
+      proof?: unknown
+    }
+    const verified =
+      token !== null &&
+      typeof body.proof === "string" &&
+      (await safeEqual(body.proof, await expectedProof(token, nonce)))
     return {
       ok: true,
+      verified,
       buildId: typeof body.buildId === "string" ? body.buildId : undefined,
       pid: typeof body.pid === "number" ? body.pid : undefined,
       inflight: typeof body.inflight === "number" ? body.inflight : undefined,
     }
   } catch {
-    return { ok: false }
+    return { ok: false, verified: false }
   }
 }
 
@@ -220,12 +310,28 @@ export default (async () => {
     // Stale-daemon handshake (T12): healthz 200 alone can hide an old build.
     // On buildId mismatch with ZERO in-flight turns, restart with current
     // code; with turns in flight, defer to the next watchdog tick.
-    const health = await healthInfo()
+    if (!currentToken) currentToken = await loadOrCreateToken()
+    let health = await healthInfo(currentToken)
     if (!health.ok) {
+      daemonVerified = false
       return spawnDaemon(logPath)
     }
+    if (!health.verified) {
+      // The daemon may have replaced a malformed/deleted token file: re-read once.
+      currentToken = await loadOrCreateToken()
+      health = await healthInfo(currentToken)
+    }
+    if (!health.verified) {
+      // Security audit 2026-10-09: never trust (or kill) a pid reported by
+      // a listener that cannot prove it is our daemon.
+      daemonVerified = false
+      warnImpostorOnce()
+      return false
+    }
+    daemonVerified = true
     const expectedBuild = await expectedBuildId()
     if (
+      health.verified &&
       expectedBuild &&
       health.buildId &&
       health.buildId !== expectedBuild &&
@@ -233,6 +339,7 @@ export default (async () => {
       health.pid &&
       health.pid !== process.pid
     ) {
+      daemonVerified = false
       try {
         process.kill(health.pid)
       } catch {
@@ -306,9 +413,12 @@ export default (async () => {
             const props = event.properties as { info?: unknown } | undefined
             const info = props?.info as { id?: unknown } | undefined
             if (typeof info?.id === "string" && info.id) {
-              void fetch("http://127.0.0.1:41667/v1/__session/tombstone", {
+              void fetch(`${BRIDGE_ORIGIN}/v1/__session/tombstone`, {
                 method: "POST",
-                headers: { "content-type": "application/json" },
+                headers: {
+                  "content-type": "application/json",
+                  ...(daemonVerified && currentToken ? { [TOKEN_HEADER]: currentToken } : {}),
+                },
                 body: JSON.stringify({ sessionId: info.id }),
               }).catch(() => {
                 // Fire-and-forget: bridge may be down; GC tolerates it.
@@ -374,6 +484,10 @@ export default (async () => {
         }
         out.headers["x-agy-client-instance"] = clientInstanceId
         out.headers["x-agy-protocol-version"] = AGY_PROTOCOL_VERSION
+        // Only to a listener that proved it is our daemon (watchdog check).
+        if (daemonVerified && currentToken) {
+          out.headers[TOKEN_HEADER] = currentToken
+        }
       } catch {
         // Hook must never throw.
       }
