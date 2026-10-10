@@ -264,6 +264,6 @@ on bridge cwd [open decision ③-adjacent].
    SQLite — settled by research; only re-open if atomicity proves brittle.
 
 ## Appendix: materials
-- Raw design thinking: `design/raw-thinking-opus.txt` (70KB, opus-5-5 xhigh run).
-- Related history: `odd/tasks/agy-bridge.md`; silent truncation measurements in
-  engram `discovery/agy-cli-gotchas`, `bugfix/bridge-live-failures`.
+- Experiment drivers live in `scripts/experiments/`; their raw captures and the
+  internal work notes are kept out of the public repo (local machine paths,
+  conversation ids and tool inventories).

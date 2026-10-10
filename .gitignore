@@ -4,6 +4,9 @@ dist/
 .env
 .env.*
 design/experiments/ws-*/
+# Raw experiment captures (local paths, conversation ids): never publish
+design/experiments/*.json
+odd/
 .atl/
 # Private reasoning artifacts (untracked intentionally; kept local only)
 design/raw-thinking-opus.txt
