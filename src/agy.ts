@@ -25,6 +25,36 @@ export function timeoutMsFromEnv(): number {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_TIMEOUT_MS;
 }
 
+/**
+ * Environment for agy child processes (security audit 2026-10-09). agy is
+ * a full agent; it has no business seeing the credentials of every other
+ * tool the user runs (opencode passes its whole environment down). Variables
+ * whose NAME looks like a credential are dropped; AGY_ENV_PASSTHROUGH
+ * (comma-separated names) keeps specific ones when a setup really needs them.
+ */
+const SECRET_ENV_NAME =
+  /(?:^|_)(?:API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIALS?)(?:$|_)/i;
+
+export function agyChildEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const keep = new Set(
+    (source.AGY_ENV_PASSTHROUGH ?? '')
+      .split(',')
+      .map((name) => name.trim().toUpperCase())
+      .filter(Boolean),
+  );
+  const env: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(source)) {
+    if (value === undefined) {
+      continue;
+    }
+    if (SECRET_ENV_NAME.test(name) && !keep.has(name.toUpperCase())) {
+      continue;
+    }
+    env[name] = value;
+  }
+  return env;
+}
+
 /** Resolve the agy binary: AGY_BIN wins, else the official install location. */
 export function resolveAgyBinary(): string {
   const override = process.env.AGY_BIN?.trim();
@@ -560,6 +590,7 @@ export function runAgyTurn(
       child = spawn(cmd, args, {
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
+        env: agyChildEnv(),
         // Session mode pins a dedicated neutral dir per conversation; resume
         // reuses it. Undefined = inherit the daemon cwd (legacy behavior).
         ...(request.workspaceDir ? { cwd: request.workspaceDir } : {}),

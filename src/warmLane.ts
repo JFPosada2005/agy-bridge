@@ -31,6 +31,7 @@ import {
   AgyAbortedError,
   AgyConversationMismatchError,
   AgyTimeoutError,
+  agyChildEnv,
   type AgyUsage,
 } from './agy';
 
@@ -149,6 +150,7 @@ export class WarmLane {
         : spawn(AGY_BIN, args, {
             stdio: ['pipe', 'pipe', 'pipe'],
             windowsHide: true,
+            env: agyChildEnv(),
             ...(this.workspaceDir ? { cwd: this.workspaceDir } : {}),
           });
     } catch (err) {

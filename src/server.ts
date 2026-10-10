@@ -75,6 +75,20 @@ export function destroyAllWarmLanes(): void {
 export const DEFAULT_PORT = 41667;
 export const MAX_CONCURRENT_TURNS = 3;
 
+/**
+ * Request body cap. Fastify's default (1 MiB, ~250K tokens of JSON) rejected
+ * long sessions with 413 while the plugin declares 1M-token contexts.
+ * Default 32 MiB; AGY_BRIDGE_BODY_LIMIT_MB overrides. Only token holders can
+ * send bodies at all (security audit 2026-10-09).
+ */
+export const DEFAULT_BODY_LIMIT_MB = 32;
+
+export function bodyLimitBytesFromEnv(): number {
+  const raw = Number(process.env.AGY_BRIDGE_BODY_LIMIT_MB?.trim() ?? '');
+  const mb = Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_BODY_LIMIT_MB;
+  return Math.floor(mb * 1024 * 1024);
+}
+
 // Phase 0 observability: single-line request logger (console + file).
 // Same portable telemetry contract on every machine:
 // - AGY_BRIDGE_LOG wins when set (the opencode plugin always sets it).
@@ -945,7 +959,7 @@ export function computeBuildId(): string {
 }
 
 export function buildApp(options: BridgeOptions = {}): FastifyInstance {
-  const app = Fastify({ logger: false });
+  const app = Fastify({ logger: false, bodyLimit: bodyLimitBytesFromEnv() });
   let adapter = options.adapter ?? defaultAdapter;
 
   const apiToken = options.security?.token ?? null;

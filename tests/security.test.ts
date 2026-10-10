@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { agyChildEnv, runAgyTurn } from '../src/agy';
 import { healthProof, loadOrCreateToken, TOKEN_HEADER } from '../src/security';
 import { buildApp, type TurnAdapter } from '../src/server';
 import {
@@ -251,4 +252,54 @@ describe('loadOrCreateToken', () => {
     expect(indexSrc).toMatch(/loadOrCreateToken\(\)/);
     expect(indexSrc).toMatch(/buildApp\(\{ security: \{ token \} \}\)/);
   });
+});
+
+describe('request body limit', () => {
+  it('accepts a 2 MB chat body (Fastify default 1 MiB answered 413)', async () => {
+    const app = buildApp({ adapter: okAdapter });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: { model: MODEL, messages: [{ role: 'user', content: 'x'.repeat(2_000_000) }] },
+    });
+    expect(res.statusCode).toBe(200);
+    await app.close();
+  });
+});
+
+describe('agy child environment', () => {
+  it('drops credential-looking variables and honors AGY_ENV_PASSTHROUGH', () => {
+    const env = agyChildEnv({
+      PATH: '/bin',
+      USERPROFILE: 'C:\\u',
+      OPENAI_API_KEY: 's',
+      GITHUB_TOKEN: 't',
+      AWS_SECRET_ACCESS_KEY: 'a',
+      MY_PASSWORD: 'p',
+      GOOGLE_APPLICATION_CREDENTIALS: 'c',
+      TOKENIZER_PATH: 'v',
+      AGY_ENV_PASSTHROUGH: 'github_token',
+    });
+    expect(Object.keys(env).sort()).toEqual(['AGY_ENV_PASSTHROUGH', 'GITHUB_TOKEN', 'PATH', 'TOKENIZER_PATH', 'USERPROFILE']);
+  });
+
+  it('the spawned agy process does not receive them', async () => {
+    process.env.FAKE_PROVIDER_API_KEY = 'leak-me';
+    try {
+      const script =
+        "process.stdin.resume(); process.stdin.on('end', () => console.log(JSON.stringify(" +
+        "{ event: 'result', result: { response: Object.keys(process.env).join(',') } })));";
+      const result = await runAgyTurn({
+        model: 'fake-model',
+        effort: null,
+        prompt: 'hi',
+        binaryPath: process.execPath,
+        commandOverride: { cmd: process.execPath, args: ['-e', script] },
+      });
+      expect(result.text).toMatch(/PATH/i);
+      expect(result.text).not.toContain('FAKE_PROVIDER_API_KEY');
+    } finally {
+      delete process.env.FAKE_PROVIDER_API_KEY;
+    }
+  }, 15_000);
 });
