@@ -13,3 +13,8 @@ process.env.AGY_BRIDGE_LOG = join(
   mkdtempSync(join(tmpdir(), 'agy-bridge-test-log-')),
   'bridge.log',
 );
+
+// Debug routes are opt-in in production (security audit 2026-10-09); the
+// existing E1/T17 tests exercise them, so the suite enables them globally.
+// tests/security.test.ts flips this off where it checks the default.
+process.env.AGY_BRIDGE_DEBUG = '1';

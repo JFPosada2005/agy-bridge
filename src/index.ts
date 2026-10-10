@@ -1,12 +1,22 @@
 // Bridge entrypoint: start the Fastify app on 127.0.0.1 and report status.
 
 import { getAgyStatus } from './agy';
+import { loadOrCreateToken, tokenFilePath } from './security';
 import { buildApp, DEFAULT_PORT } from './server';
 
 async function main(): Promise<void> {
   const port = Number(process.env.AGY_BRIDGE_PORT ?? DEFAULT_PORT) || DEFAULT_PORT;
   const host = '127.0.0.1';
-  const app = buildApp();
+  // Security audit 2026-10-09: the real daemon ALWAYS requires the install
+  // token (shared with the opencode plugin through this file).
+  let token: string;
+  try {
+    token = loadOrCreateToken();
+  } catch (err) {
+    console.error(`agy-bridge: cannot load or create ${tokenFilePath()}: ${(err as Error).message}`);
+    process.exit(1);
+  }
+  const app = buildApp({ security: { token } });
 
   const shutdown = async (): Promise<void> => {
     // T18: warm lanes must not outlive the daemon.

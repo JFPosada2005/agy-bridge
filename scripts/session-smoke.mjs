@@ -28,6 +28,7 @@ const daemon = spawn(process.execPath, ['dist/index.js'], {
     AGY_BRIDGE_HOME: home,
     AGY_BRIDGE_LOG: join(home, 'bridge.log'),
     AGY_SESSION_MODE: '1',
+    AGY_BRIDGE_DEBUG: '1',
   },
   stdio: 'ignore',
 });
@@ -51,8 +52,11 @@ async function waitForHealthz() {
 try {
   check('daemon restart (healthz)', await waitForHealthz());
 
+  // The daemon creates the install token on start (security audit 2026-10-09).
+  const token = readFileSync(join(home, 'token'), 'utf8').trim();
   const echo = await fetch(`http://127.0.0.1:${port}/v1/__debug/echo`, {
     headers: {
+      'x-agy-token': token,
       'x-agy-session-id': 'ses-smoke',
       'x-agy-agent': 'build',
       'x-agy-message-id': 'm1',
@@ -74,6 +78,9 @@ try {
 // --- Part B: session path with a fake adapter (zero agy) ---
 process.env.AGY_BRIDGE_HOME = home;
 process.env.AGY_SESSION_MODE = '1';
+// Warm lanes are default ON and would spawn the REAL agy for session turns
+// (plan quota) instead of the fake adapter; this smoke promises zero agy.
+process.env.AGY_WARM_LANE = '0';
 
 let turns = 0;
 const seenPrompts = [];

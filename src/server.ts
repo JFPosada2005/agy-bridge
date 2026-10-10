@@ -53,6 +53,15 @@ import {
   type SessionRecord,
 } from './sessionStore';
 import { WarmLaneManager, warmLaneEnabled } from './warmLane';
+import {
+  debugRoutesEnabled,
+  healthProof,
+  isAllowedOrigin,
+  isLoopbackHost,
+  safeEqual,
+  suppliedToken,
+  TOKEN_HEADER,
+} from './security';
 
 /** T18: latest spawn info per session for warm-lane construction. */
 const sessionModelOptions = new Map<string, { model: string; effort: string | null; workspaceDir?: string }>();
@@ -892,6 +901,12 @@ export interface BridgeOptions {
   agyVersion?: string | null;
   /** T18 test hook: warm-lane bounds + manager instance injection. */
   warmLaneManager?: WarmLaneManager;
+  /**
+   * Per-install token (src/security.ts). The daemon entrypoint (index.ts)
+   * always passes it; when absent or null, token auth is off (in-process
+   * tests only). Host/Origin checks apply either way.
+   */
+  security?: { token: string | null };
 }
 
 /**
@@ -932,6 +947,36 @@ export function computeBuildId(): string {
 export function buildApp(options: BridgeOptions = {}): FastifyInstance {
   const app = Fastify({ logger: false });
   let adapter = options.adapter ?? defaultAdapter;
+
+  const apiToken = options.security?.token ?? null;
+  const isAuthorized = (headers: Record<string, unknown>): boolean =>
+    apiToken === null || safeEqual(suppliedToken(headers), apiToken);
+
+  // Security gate (audit 2026-10-09), registered before any route: loopback
+  // Host (DNS rebinding), loopback-or-absent Origin (browsers), and the
+  // install token on every route except the public GET /healthz.
+  app.addHook('onRequest', async (request, reply) => {
+    const headers = (request.headers ?? {}) as Record<string, unknown>;
+    if (!isLoopbackHost(headers['host'])) {
+      reply
+        .code(403)
+        .send(errorBody('Host must be 127.0.0.1 or localhost', 'forbidden_host', 'invalid_request_error'));
+      return reply;
+    }
+    if (!isAllowedOrigin(headers['origin'])) {
+      reply
+        .code(403)
+        .send(errorBody('Cross-origin requests are not allowed', 'forbidden_origin', 'invalid_request_error'));
+      return reply;
+    }
+    const publicRoute = request.method === 'GET' && request.routeOptions.url === '/healthz';
+    if (!publicRoute && !isAuthorized(headers)) {
+      reply
+        .code(401)
+        .send(errorBody(`missing or invalid ${TOKEN_HEADER}`, 'unauthorized', 'invalid_request_error'));
+      return reply;
+    }
+  });
 
   // T18 warm lane: by default ON (AGY_WARM_LANE=0 opts out), wrap the
   // adapter — session-keyed
@@ -1038,19 +1083,36 @@ export function buildApp(options: BridgeOptions = {}): FastifyInstance {
   // pid lets the plugin kill exactly that process on mismatch; inflight
   // gates the restart so in-flight turns of other opencode instances are
   // never killed (defer to the next watchdog tick).
-  app.get('/healthz', () => ({
-    status: 'ok',
-    agy: getAgyStatus(),
-    buildId: computeBuildId(),
-    pid: process.pid,
-    inflight: active,
-  }));
+  // Public route (no token): `proof` = HMAC(token, nonce) lets the plugin
+  // verify it is talking to THIS daemon before trusting pid/buildId or
+  // sending the token. `agy` (binary path = Windows user name) is token-only.
+  app.get('/healthz', (request) => {
+    const query = (request.query ?? {}) as Record<string, unknown>;
+    const nonce = typeof query['nonce'] === 'string' ? query['nonce'] : '';
+    const withProof = apiToken !== null && nonce.length > 0 && nonce.length <= 128;
+    return {
+      status: 'ok',
+      buildId: computeBuildId(),
+      pid: process.pid,
+      inflight: active,
+      ...(withProof ? { proof: healthProof(apiToken, nonce) } : {}),
+      ...(isAuthorized((request.headers ?? {}) as Record<string, unknown>) ? { agy: getAgyStatus() } : {}),
+    };
+  });
 
   app.get('/v1/models', () => toOpenAIModelList());
 
   // Experiment E1 probe: echo the received headers back. Localhost-only
   // server, zero agy cost.
-  app.get('/v1/__debug/echo', async (request) => ({ headers: request.headers ?? {} }));
+  // Debug routes are opt-in (AGY_BRIDGE_DEBUG=1) and still require the token.
+  const debugNotFound = errorBody('Not Found', 'not_found', 'invalid_request_error');
+  app.get('/v1/__debug/echo', async (request, reply) => {
+    if (!debugRoutesEnabled()) {
+      return reply.code(404).send(debugNotFound);
+    }
+    const { [TOKEN_HEADER]: _token, authorization: _auth, ...headers } = request.headers ?? {};
+    return { headers };
+  });
 
   // T15: the plugin forwards opencode's session.deleted; the record becomes
   // tombstoneed (GC-eligible after grace) but stays on disk — the ledger
@@ -1080,7 +1142,10 @@ export function buildApp(options: BridgeOptions = {}): FastifyInstance {
 
   // T17 telemetry (Phase 2 optional item): per-app turn counters + registry
   // overview. Localhost-only, zero agy cost.
-  app.get('/v1/__debug/stats', async () => {
+  app.get('/v1/__debug/stats', async (_request, reply) => {
+    if (!debugRoutesEnabled()) {
+      return reply.code(404).send(debugNotFound);
+    }
     let sessions = 0;
     let tombstonedSessions = 0;
     let branches = 0;

@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { healthProof, loadOrCreateToken, TOKEN_HEADER } from '../src/security';
 import { buildApp, type TurnAdapter } from '../src/server';
 import {
   freshSessionRecord,
@@ -15,7 +16,7 @@ import {
 // ever be read, renamed or written outside <home>/sessions.
 
 process.env.AGY_WARM_LANE = '0';
-const ENV_KEYS = ['AGY_SESSION_MODE', 'AGY_BRIDGE_HOME'] as const;
+const ENV_KEYS = ['AGY_SESSION_MODE', 'AGY_BRIDGE_HOME', 'AGY_BRIDGE_DEBUG'] as const;
 const MODEL = 'gemini-3.6-flash-low';
 
 let root = '';
@@ -117,5 +118,137 @@ describe('session id validation (path traversal)', () => {
     expect(res.statusCode).toBe(200);
     expect(existsSync(join(root, 'home', 'sessions', 'ses_valid1.json'))).toBe(true);
     await app.close();
+  });
+});
+
+const TOKEN = 'a'.repeat(64);
+const chatPayload = { model: MODEL, messages: [{ role: 'user', content: 'hi' }] };
+
+describe('install token, Host and Origin gate', () => {
+  it('requires the token on API routes when configured', async () => {
+    const app = buildApp({ adapter: okAdapter, security: { token: TOKEN } });
+    const none = await app.inject({ method: 'POST', url: '/v1/chat/completions', payload: chatPayload });
+    expect(none.statusCode).toBe(401);
+    const wrong = await app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { [TOKEN_HEADER]: 'b'.repeat(64) },
+      payload: chatPayload,
+    });
+    expect(wrong.statusCode).toBe(401);
+    const header = await app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { [TOKEN_HEADER]: TOKEN },
+      payload: chatPayload,
+    });
+    expect(header.statusCode).toBe(200);
+    const bearer = await app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: chatPayload,
+    });
+    expect(bearer.statusCode).toBe(200);
+    const models = await app.inject({ method: 'GET', url: '/v1/models' });
+    expect(models.statusCode).toBe(401);
+    const tombstone = await app.inject({ method: 'POST', url: '/v1/__session/tombstone', payload: { sessionId: 'ses_x' } });
+    expect(tombstone.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it('rejects non-loopback Host headers (DNS rebinding) even with the token', async () => {
+    const app = buildApp({ adapter: okAdapter, security: { token: TOKEN } });
+    for (const host of ['attacker.example:41667', 'attacker.example', '127.0.0.1.attacker.example']) {
+      const res = await app.inject({ method: 'GET', url: '/healthz', headers: { host, [TOKEN_HEADER]: TOKEN } });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error.code).toBe('forbidden_host');
+    }
+    for (const host of ['127.0.0.1:41667', 'localhost:41667', 'localhost']) {
+      const res = await app.inject({ method: 'GET', url: '/healthz', headers: { host } });
+      expect(res.statusCode).toBe(200);
+    }
+    await app.close();
+  });
+
+  it('rejects browser requests from foreign origins', async () => {
+    const app = buildApp({ adapter: okAdapter, security: { token: TOKEN } });
+    for (const origin of ['https://evil.example', 'null']) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/chat/completions',
+        headers: { origin, [TOKEN_HEADER]: TOKEN },
+        payload: chatPayload,
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error.code).toBe('forbidden_origin');
+    }
+    const local = await app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { origin: 'http://127.0.0.1:4096', [TOKEN_HEADER]: TOKEN },
+      payload: chatPayload,
+    });
+    expect(local.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it('public /healthz returns only non-sensitive fields plus the HMAC proof', async () => {
+    const app = buildApp({ adapter: okAdapter, security: { token: TOKEN } });
+    const anon = await app.inject({ method: 'GET', url: '/healthz?nonce=n0nce' });
+    expect(anon.statusCode).toBe(200);
+    const body = anon.json() as Record<string, unknown>;
+    expect(body).toMatchObject({ status: 'ok', inflight: 0 });
+    expect(typeof body['pid']).toBe('number');
+    expect(body['agy']).toBeUndefined();
+    expect(body['proof']).toBe(healthProof(TOKEN, 'n0nce'));
+    expect(body['proof']).not.toBe(healthProof('c'.repeat(64), 'n0nce'));
+    const authed = await app.inject({ method: 'GET', url: '/healthz', headers: { [TOKEN_HEADER]: TOKEN } });
+    expect((authed.json() as Record<string, unknown>)['agy']).toBeDefined();
+    await app.close();
+  });
+
+  it('debug routes are off unless AGY_BRIDGE_DEBUG is set, and never echo the token', async () => {
+    delete process.env.AGY_BRIDGE_DEBUG;
+    const app = buildApp({ adapter: okAdapter, security: { token: TOKEN } });
+    for (const url of ['/v1/__debug/echo', '/v1/__debug/stats']) {
+      const res = await app.inject({ method: 'GET', url, headers: { [TOKEN_HEADER]: TOKEN } });
+      expect(res.statusCode).toBe(404);
+    }
+    process.env.AGY_BRIDGE_DEBUG = '1';
+    const echo = await app.inject({
+      method: 'GET',
+      url: '/v1/__debug/echo',
+      headers: { [TOKEN_HEADER]: TOKEN, 'x-agy-session-id': 'ses_1' },
+    });
+    expect(echo.statusCode).toBe(200);
+    const echoed = (echo.json() as { headers: Record<string, string> }).headers;
+    expect(echoed['x-agy-session-id']).toBe('ses_1');
+    expect(echoed[TOKEN_HEADER]).toBeUndefined();
+    const noToken = await app.inject({ method: 'GET', url: '/v1/__debug/stats' });
+    expect(noToken.statusCode).toBe(401);
+    await app.close();
+  });
+});
+
+describe('loadOrCreateToken', () => {
+  it('creates a 64-hex token once, reuses it, and replaces a malformed file', () => {
+    const file = join(root, 'home', 'token');
+    const first = loadOrCreateToken(file);
+    expect(first).toMatch(/^[0-9a-f]{64}$/);
+    expect(loadOrCreateToken(file)).toBe(first);
+    if (process.platform !== 'win32') {
+      expect(statSync(file).mode & 0o077).toBe(0);
+    }
+    writeFileSync(file, 'garbage');
+    const replaced = loadOrCreateToken(file);
+    expect(replaced).toMatch(/^[0-9a-f]{64}$/);
+    expect(replaced).not.toBe(first);
+  });
+
+  it('the daemon entrypoint always wires the token into buildApp', () => {
+    const indexSrc = readFileSync(join(__dirname, '..', 'src', 'index.ts'), 'utf8');
+    expect(indexSrc).toMatch(/loadOrCreateToken\(\)/);
+    expect(indexSrc).toMatch(/buildApp\(\{ security: \{ token \} \}\)/);
   });
 });

@@ -4,12 +4,24 @@
 // This consumes plan requests on the user's agy account (authorized, ~2 turns).
 // Env: AGY_BRIDGE_URL (default http://127.0.0.1:41667).
 
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 const base = process.env.AGY_BRIDGE_URL ?? 'http://127.0.0.1:41667';
+
+// Install token (security audit 2026-10-09): env AGY_BRIDGE_TOKEN or <home>/token.
+function bridgeToken() {
+  if (process.env.AGY_BRIDGE_TOKEN) return process.env.AGY_BRIDGE_TOKEN.trim();
+  const home = process.env.AGY_BRIDGE_HOME?.trim() || join(homedir(), '.agy-bridge');
+  return readFileSync(join(home, 'token'), 'utf8').trim();
+}
+const authHeaders = { 'x-agy-token': bridgeToken() };
 const MODEL = 'gemini-3.6-flash-low';
 const PROMPT = 'Reply with the single word: OK';
 
 async function getJson(path) {
-  const res = await fetch(`${base}${path}`);
+  const res = await fetch(`${base}${path}`, { headers: authHeaders });
   if (!res.ok) {
     throw new Error(`GET ${path} -> ${res.status}: ${await res.text()}`);
   }
@@ -19,7 +31,7 @@ async function getJson(path) {
 async function postTurn(stream) {
   const res = await fetch(`${base}/v1/chat/completions`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...authHeaders },
     body: JSON.stringify({
       model: MODEL,
       messages: [{ role: 'user', content: PROMPT }],
