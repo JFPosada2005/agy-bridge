@@ -8,3 +8,4 @@ design/experiments/ws-*/
 # Private reasoning artifacts (untracked intentionally; kept local only)
 design/raw-thinking-opus.txt
 scripts/mine_reasoning.py
+artifacts/

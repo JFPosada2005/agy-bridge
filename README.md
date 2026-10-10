@@ -29,16 +29,30 @@ opencode ──(plugin: agy-bridge.ts)──> local daemon (fastify, 127.0.0.1:4
 
 Prerequisites: Node.js 24+ (the daemon's `engines.node` requires it), the
 Antigravity desktop app installed and signed in (its plan provides the models; a
-new user MUST be authenticated with `agy` once from the app/CLI), and opencode.
+new user MUST be authenticated with `agy` once from the app/CLI), opencode,
+and Git — or a repo ZIP from the GitHub Releases page instead of Git.
 
-1. Clone this repo somewhere stable (canonical spot: `%LOCALAPPDATA%\agy-bridge`)
-   and build once: `npm install` then `npm run build` (run the two commands
-   separately; PowerShell 5.1 does not support `&&`).
-2. Copy `plugins/agy-bridge.ts` into `~/.config/opencode/plugin/` (the plugin
-   locates the repo via `AGY_BRIDGE_REPO` env, or falls back to
-   `%LOCALAPPDATA%\agy-bridge`).
-3. Restart opencode. The watchdog starts the daemon; `GET /healthz` answers
-   `{"status":"ok","agy":...,"buildId":...,"pid":...,"inflight":...}` when healthy.
+1. **Recommended (script)** — needs Git installed and Node 24+. Run:
+   `powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/JFPosada2005/agy-bridge/agy-bridge/scripts/install.ps1 | iex"`
+   The script clones the repo to `%LOCALAPPDATA%\agy-bridge`, builds it,
+   deploys the plugin, checks for the Antigravity (`agy`) CLI, and prints
+   next steps.
+2. **ZIP (no Git needed)** — download the repo ZIP from the Releases page
+   (or Code > Download ZIP), extract it anywhere, then from inside the folder
+   run: `powershell -ExecutionPolicy Bypass -File scripts\install.ps1`
+   The script detects the in-repo mode and uses the local folder directly
+   (no git operations).
+3. **Manual (experts)**:
+   1. Clone this repo somewhere stable (canonical spot:
+      `%LOCALAPPDATA%\agy-bridge`).
+   2. Build once: run `npm install`, then `npm run build` (two separate
+      commands; PowerShell 5.1 does not support `&&`).
+   3. Copy `plugins/agy-bridge.ts` into `~/.config/opencode/plugin/` (the
+      plugin locates the repo via `AGY_BRIDGE_REPO` env, or falls back to
+      `%LOCALAPPDATA%\agy-bridge`).
+   4. Restart opencode. The watchdog starts the daemon; `GET /healthz`
+      answers `{"status":"ok","agy":...,"buildId":...,"pid":...,"inflight":...}`
+      when healthy.
 
 Note: the plugin spawns Node from `C:\Program Files\nodejs\node.exe` by default;
 on machines with a different install location set `AGY_BRIDGE_NODE` to that
