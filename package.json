@@ -1,6 +1,6 @@
 {
   "name": "agy-bridge",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "private": true,
   "description": "Local OpenAI-compatible bridge exposing agy models to opencode.",
   "type": "commonjs",

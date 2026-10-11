@@ -38,13 +38,13 @@ and Git — or a repo ZIP from the GitHub Releases page instead of Git.
       its hash with the SHA256 published in the release notes:
       `Get-FileHash .\install.ps1 -Algorithm SHA256`
    2. Read it, then run:
-      `powershell -ExecutionPolicy Bypass -File .\install.ps1 -Ref vX.Y.Z`
+      `powershell -ExecutionPolicy Bypass -File .\install.ps1 -Ref v0.1.2`
    The script clones that tag to `%LOCALAPPDATA%\agy-bridge`, builds it (`npm ci`),
    deploys the plugin, registers `AGY_BRIDGE_REPO` and `AGY_BRIDGE_NODE`, checks for
    the Antigravity (`agy`) CLI, and prints next steps.
    One-liner alternative (runs remote code you have not read; keep the tag pinned
    in the URL):
-   `powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/JFPosada2005/agy-bridge/vX.Y.Z/scripts/install.ps1 | iex"`
+   `powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/JFPosada2005/agy-bridge/v0.1.2/scripts/install.ps1 | iex"`
 2. **ZIP (no Git needed)** — download the repo ZIP from the Releases page
    (or Code > Download ZIP), extract it anywhere, then from inside the folder
    run: `powershell -ExecutionPolicy Bypass -File scripts\install.ps1`

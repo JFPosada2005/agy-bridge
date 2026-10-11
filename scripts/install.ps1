@@ -16,7 +16,7 @@
 param(
     [string]$RepoUrl = "https://github.com/JFPosada2005/agy-bridge.git",
     # Git ref to install: a release tag (recommended) or a branch name.
-    [string]$Ref = "agy-bridge",
+    [string]$Ref = "v0.1.2",
     [string]$TargetDir = (Join-Path $env:LOCALAPPDATA "agy-bridge")
 )
 
