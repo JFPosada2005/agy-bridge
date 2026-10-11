@@ -185,36 +185,47 @@ try {
     # plugin verifies an HMAC identity proof before killing a pid, and the old
     # daemon cannot answer it. The installer must retire it — but SAFELY:
     # never act on the pid alone (finding F3: a squatter on the port can
-    # report any pid). First validate the process IS this repo's own node
-    # daemon (name + command line), then stop it only when no turn is in
-    # flight. If anything does not match, tell the user and leave it alone.
+    # report any pid). The plugin (and `npm run start`) launch the daemon as
+    # `node dist/index.js` with the repo as cwd, so the command line has a
+    # forward slash and never contains the repo path. Identity check: a
+    # node.exe whose command line runs dist/index.js (either slash) and that
+    # belongs to the current user (blocks another account squatting the
+    # port). Stop it only when no turn is in flight; if anything does not
+    # match, tell the user and leave it alone.
     try {
+        $Port = 41667
+        if ($env:AGY_BRIDGE_PORT) { $Port = [int]$env:AGY_BRIDGE_PORT }
         $health = $null
         try {
-            $health = Invoke-RestMethod http://127.0.0.1:41667/healthz -TimeoutSec 3
+            $health = Invoke-RestMethod "http://127.0.0.1:$Port/healthz" -TimeoutSec 3
         } catch {
             # No daemon running: nothing to retire (fresh install path).
         }
         if ($health -and $health.pid) {
-            $proc = Get-Process -Id $health.pid -ErrorAction SilentlyContinue
-            $procName = $null
-            $cmdLine = $null
-            if ($proc) {
-                $procName = $proc.ProcessName
-                $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId=$($health.pid)" -ErrorAction SilentlyContinue).CommandLine
+            # Cast first: the pid comes from whoever answers on the port and
+            # is interpolated into a WQL filter below.
+            $DaemonPid = [int]$health.pid
+            $cim = Get-CimInstance Win32_Process -Filter "ProcessId=$DaemonPid" -ErrorAction SilentlyContinue
+            $owner = $null
+            if ($cim) {
+                $owner = Invoke-CimMethod -InputObject $cim -MethodName GetOwner -ErrorAction SilentlyContinue
             }
-            $isOurs = ($proc -and $procName -eq "node" -and
-                       $cmdLine -and $cmdLine -match "dist\\index\.js" -and
-                       $cmdLine -match [regex]::Escape($RepoRoot))
+            $isOurs = ($cim -and $cim.Name -eq "node.exe" -and
+                       $cim.CommandLine -match 'dist[\\/]index\.js' -and
+                       $owner -and $owner.User -eq $env:USERNAME)
             if (-not $isOurs) {
-                Write-Host "WARNING: port 41667 is held by something that is not this repo's daemon (pid $($health.pid)). Close it manually if it is old, then restart opencode."
+                Write-Host "WARNING: port $Port is held by a process that does not look like the agy-bridge daemon (pid $DaemonPid). Left it running."
             }
             elseif ($health.inflight -gt 0) {
-                Write-Host "A turn is in flight on the old daemon; it will be retired by the plugin watchdog after the last turn finishes. Just restart opencode when convenient."
+                Write-Host "The previous daemon (pid $DaemonPid) is answering a request. When it finishes, run: Stop-Process -Id $DaemonPid (then restart opencode)."
             }
             else {
-                Stop-Process -Id $health.pid -ErrorAction SilentlyContinue
-                Write-Host "Retired the previous daemon (pid $($health.pid)); the new one starts with opencode or its watchdog."
+                try {
+                    Stop-Process -Id $DaemonPid -ErrorAction Stop
+                    Write-Host "Stopped the previous daemon (pid $DaemonPid); the new one starts with opencode."
+                } catch {
+                    Write-Host "Could not stop the previous daemon (pid $DaemonPid): $($_.Exception.Message). Stop it manually, then restart opencode."
+                }
             }
         }
     } catch {

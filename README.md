@@ -90,8 +90,10 @@ program and, through DNS rebinding, by web pages. So:
   with `AGY_ENV_PASSTHROUGH=NAME1,NAME2`.
 - Request bodies up to 32 MiB (`AGY_BRIDGE_BODY_LIMIT_MB` overrides).
 
-Upgrading from a version without the token: stop the old daemon once and restart
-opencode (the new plugin refuses to kill a daemon that cannot prove its identity):
+Upgrading from a version without the token: the installer stops the old daemon
+for you (after checking it is your own `node dist/index.js` process), then restart
+opencode. If it reports that it could not, stop it once yourself (the new plugin
+refuses to kill a daemon that cannot prove its identity):
 `Stop-Process -Id (Invoke-RestMethod http://127.0.0.1:41667/healthz).pid`
 
 Report vulnerabilities privately: see [SECURITY.md](SECURITY.md).
