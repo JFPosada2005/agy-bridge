@@ -32,29 +32,6 @@ try {
         return $true
     }
 
-    # Remove one string entry from the V1 "plugin" array without rewriting the
-    # rest of the file. The config is JSON/JSONC that may contain duplicate
-    # keys and comments, so parse-and-write would destroy user content; this
-    # edits only the exact entry line and its comma.
-    function Remove-V1PluginEntry {
-        param([string]$ConfigPath, [string]$Entry)
-        if (-not (Test-Path $ConfigPath)) { return $false }
-        $text = [System.IO.File]::ReadAllText($ConfigPath)
-        $quoted = [regex]::Escape('"' + $Entry + '"')
-        $patterns = @(
-            "(?m)^[ \t]*$quoted[ \t]*,[ \t]*\r?\n",
-            "(?m),[ \t]*\r?\n[ \t]*$quoted[ \t]*(?=\r?\n[ \t]*\])"
-        )
-        foreach ($pattern in $patterns) {
-            $updated = [regex]::Replace($text, $pattern, '', 1)
-            if ($updated -ne $text) {
-                [System.IO.File]::WriteAllText($ConfigPath, $updated)
-                return $true
-            }
-        }
-        return $false
-    }
-
     # --- 0. Prerequisite checks run FIRST in every mode (fail fast before any
     # git traffic or files are downloaded) ---
     # a. Node.js check (the project engines.node field requires >= 24)
@@ -239,26 +216,16 @@ try {
             }
             Write-Host "Retired the V1 plugin copy: $LegacyPlugin"
         }
-        # A V1 config entry that still points at the retired file makes V2 log
-        # a failed-load warning on every start; remove only that entry.
-        foreach ($ConfigRelative in @(".config\opencode\opencode.json", ".config\opencode\opencode.jsonc")) {
-            $ConfigPath = Join-Path $env:USERPROFILE $ConfigRelative
-            if ((Test-Path $ConfigPath) -and
-                (Test-CanProceed $ConfigPath "Remove the V1 plugin entry")) {
-                if (Remove-V1PluginEntry -ConfigPath $ConfigPath -Entry "./plugin/agy-bridge.ts") {
-                    Write-Host "Removed the V1 plugin entry from $ConfigPath"
-                }
-            }
-        }
-        # V1 configs define one model per reasoning effort. V2 merges config
-        # models after plugin transforms, so migrate the file itself to the
-        # family surface (the script preserves JSONC and makes a backup).
+        # The config still points at the retired V1 plugin and defines one
+        # model per reasoning effort. One JSONC-safe migration removes both,
+        # preserves comments/inline entries/indentation, and writes a single
+        # backup before the first change.
         $MigrateScript = Join-Path $RepoRoot "scripts\migrate-agy-models.mjs"
         if ((Test-Path $MigrateScript) -and
-            (Test-CanProceed "agy-bridge model entries" "Migrate V1 per-effort models to family models")) {
+            (Test-CanProceed "agy-bridge config entries" "Migrate the V1 plugin entry and per-effort models")) {
             node $MigrateScript
             if ($LASTEXITCODE -ne 0) {
-                Write-Host "WARNING: config model migration exited with code $LASTEXITCODE; legacy model entries may remain."
+                Write-Host "WARNING: config migration exited with code $LASTEXITCODE; V1 entries may remain."
             }
         }
     }
