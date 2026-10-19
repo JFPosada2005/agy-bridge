@@ -10,13 +10,16 @@ official `agy` binary doing all the talking (the bridge never touches OAuth).
 opencode ──(plugin: agy-bridge.ts)──> local daemon (fastify, 127.0.0.1:41667) ──> official `agy` CLI
 ```
 
-- The **plugin** (`plugins/agy-bridge.ts`, auto-discovered from the opencode plugin
-  dir) keeps the daemon alive (watchdog every 30s, restarts on stale build), injects
-  `x-agy-*` identity headers, and registers the `agy-bridge` provider + its models
-  portably via the `config` hook — the user's own config always wins.
+- The **plugin** keeps the daemon alive (watchdog every 30s, restarts on stale
+  build) and injects `x-agy-*` identity headers. V1 hosts load
+  `plugins/agy-bridge.ts`; V2 hosts load `plugins/agy-bridge-v2.ts` (deployed as
+  `~/.config/opencode/plugins/agy-bridge.ts`). V2 has no `config` hook: the V2
+  plugin registers the `agy-bridge` provider and its models through
+  `ctx.provider.transform`, add-only against the user's own config.
 - The **daemon** (`src/server.ts`) runs sessions stably with the official `agy`
   binary, serves the OpenAI API surface (`/v1/models`, `/v1/chat/completions`), and
-  exposes a model surface of Gemini / Claude / GPT-OSS ids delegated by `agy`.
+  exposes one model per family (Gemini / Claude / GPT-OSS) with the reasoning level
+  selected per request (`reasoning_effort`, or a legacy `-high/-medium/-low` alias).
 - **Warm lanes**: the daemon keeps one warm `agy` conversation per active
   session (overall cap `AGY_MAX_WARM_LANES`, default 8 across all sessions);
   subsequent turns with the same session identity re-warm instead of paying a
@@ -38,13 +41,16 @@ and Git — or a repo ZIP from the GitHub Releases page instead of Git.
       its hash with the SHA256 published in the release notes:
       `Get-FileHash .\install.ps1 -Algorithm SHA256`
    2. Read it, then run:
-      `powershell -ExecutionPolicy Bypass -File .\install.ps1 -Ref v0.1.2`
+      `powershell -ExecutionPolicy Bypass -File .\install.ps1 -Ref v0.2.0`
    The script clones that tag to `%LOCALAPPDATA%\agy-bridge`, builds it (`npm ci`),
-   deploys the plugin, registers `AGY_BRIDGE_REPO` and `AGY_BRIDGE_NODE`, checks for
-   the Antigravity (`agy`) CLI, and prints next steps.
+   detects the OpenCode major version, deploys the right plugin, registers
+   `AGY_BRIDGE_REPO` and `AGY_BRIDGE_NODE`, checks for the Antigravity (`agy`) CLI,
+   and prints next steps. On OpenCode V2 it also retires the V1 plugin copy and
+   migrates the config's legacy per-effort model entries (backup:
+   `opencode.json.agy-bridge.bak`).
    One-liner alternative (runs remote code you have not read; keep the tag pinned
    in the URL):
-   `powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/JFPosada2005/agy-bridge/v0.1.2/scripts/install.ps1 | iex"`
+   `powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/JFPosada2005/agy-bridge/v0.2.0/scripts/install.ps1 | iex"`
 2. **ZIP (no Git needed)** — download the repo ZIP from the Releases page
    (or Code > Download ZIP), extract it anywhere, then from inside the folder
    run: `powershell -ExecutionPolicy Bypass -File scripts\install.ps1`
@@ -55,9 +61,14 @@ and Git — or a repo ZIP from the GitHub Releases page instead of Git.
       `%LOCALAPPDATA%\agy-bridge`).
    2. Build once: run `npm ci`, then `npm run build` (two separate
       commands; PowerShell 5.1 does not support `&&`).
-   3. Copy `plugins/agy-bridge.ts` into `~/.config/opencode/plugin/` (the
-      plugin locates the repo via `AGY_BRIDGE_REPO` env, or falls back to
-      `%LOCALAPPDATA%\agy-bridge`).
+   3. Copy the plugin for your OpenCode major version:
+      - **opencode 2.x**: `plugins/agy-bridge-v2.ts` ->
+        `~/.config/opencode/plugins/agy-bridge.ts`, and remove the old
+        `~/.config/opencode/plugin/agy-bridge.ts` if present.
+      - **opencode 1.x**: `plugins/agy-bridge.ts` ->
+        `~/.config/opencode/plugin/agy-bridge.ts`.
+      The plugin locates the repo via `AGY_BRIDGE_REPO` env, or falls back to
+      `%LOCALAPPDATA%\agy-bridge`.
    4. Restart opencode. The watchdog starts the daemon; `GET /healthz`
       answers `{"status":"ok","buildId":...,"pid":...,"inflight":...}` when
       healthy (the `agy` status block is only returned with the token).
@@ -65,6 +76,33 @@ and Git — or a repo ZIP from the GitHub Releases page instead of Git.
 Note: the plugin spawns Node from `C:\Program Files\nodejs\node.exe` by default;
 on machines with a different install location set `AGY_BRIDGE_NODE` to that
 node.exe path (the installer does this for you).
+
+## Models and reasoning variants (OpenCode V2)
+
+V2 exposes **one model per family**; the reasoning level is selected as a model
+variant (`provider/model#variant`), not as a separate model id:
+
+| Model id | Variants |
+| --- | --- |
+| `agy-bridge/gemini-3.8-flash` (also `3.7`, `3.6`) | `low`, `medium`, `high` |
+| `agy-bridge/gemini-3.1-pro` | `low`, `high` |
+| `agy-bridge/claude-sonnet-4-6`, `claude-opus-4-6-thinking` | none (thinking is inherent) |
+| `agy-bridge/gpt-oss-120b` | default `medium` |
+
+```powershell
+opencode run -m agy-bridge/gemini-3.8-flash#high "Review this migration"
+opencode run -m agy-bridge/gemini-3.1-pro#low "Summarize the diff"
+```
+
+The selected level travels as the OpenAI `reasoning_effort` field and is
+translated to `agy --effort`. An unsupported level is rejected with 400
+`invalid_reasoning_effort`. Changing the variant mid-session recycles the warm
+`agy` process with the same conversation, so the new level actually takes effect.
+
+V1's per-effort ids (`gemini-3.8-flash-low`, ...) remain accepted by the daemon
+as aliases so existing V1 configs keep working, but they are hidden from the V2
+catalog. The installer migrates old config entries to the family surface and
+keeps a backup next to the config.
 
 ## Security model
 
@@ -116,8 +154,9 @@ Everything the daemon does per request lands in one append-only file:
 | Custom override — manual starts only | set `AGY_BRIDGE_LOG=/path/to/bridge.log` before launching the daemon |
 
 Every line is `|`-separated single-line JSON-friendly text: timestamp, method, path,
-status, `sessionId=`, `agent=`, `msgId=`, token usage (`prompt=/completion=/
-total=/cached=`), and what the underlying `agy` received (`model=`, `tools=N`).
+status, `sessionId=`, `agent=`, `msgId=`, the selected `effort=`, token usage
+(`prompt=/completion=/total=/cached=`), and what the underlying `agy` received
+(`model=`, `tools=N`).
 Session records live under `%USERPROFILE%\.agy-bridge\sessions\` and agy workspaces
 under `%USERPROFILE%\.agy-bridge\workspace\`.
 
