@@ -2,9 +2,11 @@
 
 > **Status (2026-10-19): implemented and verified on OpenCode 2.0.32.** The
 > shipped implementation is `plugins/agy-bridge-v2.ts` (a separate V2 file, not
-> the dual entrypoint of section 5). Verification evidence lives in
-> `odd/tasks/opencode-v2-port.md`. One correction to section 4: the known gap is
-> closed (see the note there).
+> the dual entrypoint of section 5). Verification evidence lives in the committed
+> tests (`tests/pluginV2.test.ts`, `tests/reasoningEffort.test.ts`,
+> `tests/migrateAgyModels.test.ts`, `tests/migrateAgyModelsPreserve.test.ts`),
+> the README, and the live `bridge.log`. One correction to section 4: the known
+> gap is closed (see the note there).
 
 OpenCode V2 (2.0.x) will not load `plugins/agy-bridge.ts`. The daemon and the provider still work. What stops working is the plugin's job: no watchdog, no `x-agy-*` identity headers, and no automatic provider registration. This guide explains how to port the plugin to V2 and how to keep one file that loads in both V1 and V2.
 
@@ -151,14 +153,11 @@ Two cautions about events:
 - `session.forked` also carries a `parentID`, but that is the fork source, not a subagent parent. Do not map it to `x-agy-parent-session-id` **[A, inferred from the event name]**.
 - Any session created before the subscription opens is missed. If parent linkage matters for those sessions, look it up lazily with `ctx.session.get({ sessionID })`, whose result type `SessionInfo` has `parentID?` **[V, types.d.ts]**. That breaks the old "no network in the header hook" rule, so wrap it in a short timeout if you add it **[A]**.
 
-**Step 5: Decide what to do about provider registration.** The V1 `config` hook has no direct V2 equivalent. Pick one option:
+**Step 5: Register the provider (shipped).** V2 has no config hook. The plugin calls `ctx.provider.transform` and adds the provider/models when absent; a live run showed `editor.get("agy-bridge")` is **absent during setup**, because a config-defined provider is merged after plugin transforms. The transform therefore also owns the family model list, and `scripts/migrate-agy-models.mjs` removes the V1 per-effort entries from the config file (the source of truth) with a backup.
 
-- **A (recommended, simplest):** Drop the hook in V2. `~/.config/opencode/opencode.json` already defines `provider.agy-bridge`, and V2 "normalizes V1 provider syntax without warnings" **[V, migrate-v1]**. The cost is that portability to fresh machines is lost until option B is built.
-- **B (keeps the portable behavior):** Call `await ctx.provider.transform((editor) => { if (!editor.get("agy-bridge")) editor.add({ info, models }) })`. The guard keeps the add-only semantics.
-  - Transform callbacks must be "synchronous, cheap, and free of one-time side effects" **[V, migrate-v1]**.
-  - `Provider.Info` requires `id`, `name`, `package` (for example `"aisdk:@ai-sdk/openai-compatible"`), `activation`, `settings`, `headers` and `body`.
-  - `Model.Info` requires many fields: `capabilities`, `variants`, `time`, `cost`, `status`, `enabled`, `limit`, `id`, `modelID`, `providerID`, `name`, and more (`@opencode/schema/dist/provider.d.ts`, `model.d.ts`) **[V]**.
-  - The correct default values for those fields are not documented **[A]**. Build them once, then confirm with `opencode run`.
+- `Provider.Info` needs `id`, `name`, `activation`, `package`; the shipped package is `@opencode/ai/providers/openai-compatible` (ESM subpath in 2.0.4), not the `aisdk:` config prefix.
+- `Model.Info` needs `id`, `modelID`, `providerID`, `name`, `capabilities`, `variants`, `time`, `cost`, `status`, `enabled`, `limit`; explicit variants use `settings.reasoningEffort` **[V: `tests/pluginV2.test.ts` + live `/api/model`]**. The earlier "defaults undocumented" assumption is resolved by these fields.
+- The transform is repeatable: it preserves user models/fields and only fills the variants this release owns; a user-defined variant wins.
 
 **Step 6: Export.** Do not export anything else by name. Older V1 loaders call every named export as a plugin factory **[V, comments in engram.ts:1031 and opencode-warp.js:10; not stated in the docs]**.
 
@@ -191,19 +190,11 @@ Each host calls only its own entrypoint: V1 calls `server()` and V2 calls `setup
 ## 6. Config notes
 
 - **Plugin list.** V2 uses `"plugins"` (plural). Its entries are strings or `{ "package": "./path", "options": {...} }` objects **[V, migrate-v1]**.
-  - Your `opencode.json` still has the V1 key `"plugin": ["opencode-claude-auth@latest", "./plugin/agy-bridge.ts"]` **[V]**.
+  - The installer removes `./plugin/agy-bridge.ts` from the root `plugin`/`plugins` arrays on V2 hosts, so the retired V1 entry does not produce a failed-load warning.
   - V2 discovers local plugins in both `plugin/` and `plugins/`, and `plugins/` is the recommended location **[V, docs for `.opencode/`]**.
   - The global `~/.config/opencode/plugins/` directory is auto-loaded too: `opencode-warp.js` loads from there with no config entry **[V, log]**.
-  - Recommendation: deploy the copy to `~/.config/opencode/plugins/agy-bridge.ts` and remove the `./plugin/agy-bridge.ts` entry. That avoids two copies or two load paths **[A: double-load behavior is untested]**.
-- **Provider block.** Converting it is optional. The V2 form would be:
-
-  ```jsonc
-  "providers": { "agy-bridge": { "name": "Antigravity (agy local)",
-    "package": "aisdk:@ai-sdk/openai-compatible",
-    "settings": { "baseURL": "http://127.0.0.1:41667/v1" }, "models": { ... } } }
-  ```
-
-  The V1 form (`provider`, `npm`, `options.baseURL`) is normalized automatically **[V, migrate-v1]**. Whether V2 keeps the `models.*.limit` shape unchanged is unverified **[A]**. Keep the V1 block until the port has been tested.
+  - Shipped: the copy is deployed to `~/.config/opencode/plugins/agy-bridge.ts`; the V1 copy is retired and the entry removed. Live `opencode plugin list` shows a single `agy-bridge` source.
+- **Provider block.** The shipped plugin registers the provider through a transform with `package: "@opencode/ai/providers/openai-compatible"` and `settings.baseURL`. The installer migrates the old `provider.agy-bridge.models` entries; the V1 `provider`/`npm`/`options.baseURL` block is normalized by V2, and the model `limit` shape is accepted live **[V: `/api/model`, `tests/pluginV2.test.ts`]**.
 - **Environment.** `AGY_BRIDGE_REPO`, `AGY_BRIDGE_PORT`, `AGY_BRIDGE_NODE` and `AGY_BRIDGE_HOME` must be visible to the background service. After you change any of them, restart the service **[A, follows from `role=serve`]**.
 
 ## 7. Verification

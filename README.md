@@ -15,7 +15,9 @@ opencode ──(plugin: agy-bridge.ts)──> local daemon (fastify, 127.0.0.1:4
   `plugins/agy-bridge.ts`; V2 hosts load `plugins/agy-bridge-v2.ts` (deployed as
   `~/.config/opencode/plugins/agy-bridge.ts`). V2 has no `config` hook: the V2
   plugin registers the `agy-bridge` provider and its models through
-  `ctx.provider.transform`, add-only against the user's own config.
+  `ctx.provider.transform`, migrates the V1 per-effort ids, and preserves
+  user-defined models/fields. The installer also removes the retired V1 plugin
+  entry and legacy model entries from the config (with a backup).
 - The **daemon** (`src/server.ts`) runs sessions stably with the official `agy`
   binary, serves the OpenAI API surface (`/v1/models`, `/v1/chat/completions`), and
   exposes one model per family (Gemini / Claude / GPT-OSS) with the reasoning level
