@@ -1,7 +1,7 @@
 # agy-bridge Windows installer (PowerShell 5.1 compatible).
 #
 # Usage:
-#   powershell -ExecutionPolicy Bypass -File scripts\install.ps1 [-Ref v0.1.1]
+#   powershell -ExecutionPolicy Bypass -File scripts\install.ps1 [-Ref v0.2.0]
 #
 # The script is idempotent: re-running it updates the checkout to -Ref,
 # rebuilds, refreshes the plugin copy, and re-registers the AGY_BRIDGE_REPO
@@ -16,7 +16,7 @@
 param(
     [string]$RepoUrl = "https://github.com/JFPosada2005/agy-bridge.git",
     # Git ref to install: a release tag (recommended) or a branch name.
-    [string]$Ref = "v0.1.2",
+    [string]$Ref = "v0.2.0",
     [string]$TargetDir = (Join-Path $env:LOCALAPPDATA "agy-bridge")
 )
 
