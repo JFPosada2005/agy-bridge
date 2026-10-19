@@ -38,7 +38,7 @@ describe('GET /v1/models', () => {
     expect(response.statusCode).toBe(200);
     const body = response.json() as { object: string; data: Array<{ id: string; object: string }> };
     expect(body.object).toBe('list');
-    expect(body.data.map((entry) => entry.id)).toContain('gemini-3.6-flash-low');
+    expect(body.data.map((entry) => entry.id)).toContain('gemini-3.6-flash');
     await app.close();
   });
 });

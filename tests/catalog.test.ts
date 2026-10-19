@@ -36,9 +36,24 @@ describe('detectFamily', () => {
 });
 
 describe('catalog', () => {
-  it('matches the agy models list (14 entries)', () => {
-    expect(MODELS).toHaveLength(14);
-    expect(MODELS.map((entry) => entry.id)).toContain('gemini-3.6-flash-low');
+  it('lists one entry per model family (7 entries)', () => {
+    expect(MODELS).toHaveLength(7);
+    expect(MODELS.map((entry) => entry.id)).toContain('gemini-3.6-flash');
+    expect(MODELS.map((entry) => entry.id)).not.toContain('gemini-3.6-flash-low');
+  });
+
+  it('declares the efforts each family accepts and its default', () => {
+    const flash = findModel('gemini-3.8-flash');
+    expect(flash?.efforts).toEqual(['low', 'medium', 'high']);
+    expect(flash?.defaultEffort).toBeNull();
+    const pro = findModel('gemini-3.1-pro');
+    expect(pro?.efforts).toEqual(['low', 'high']);
+    const gpt = findModel('gpt-oss-120b');
+    expect(gpt?.efforts).toEqual(['medium']);
+    expect(gpt?.defaultEffort).toBe('medium');
+    const claude = findModel('claude-sonnet-4-6');
+    expect(claude?.efforts).toEqual([]);
+    expect(claude?.defaultEffort).toBeNull();
   });
 
   it('declares 1M context for gemini and conservative limits elsewhere', () => {
@@ -48,10 +63,11 @@ describe('catalog', () => {
     expect(claude?.contextWindow).toBe(200_000);
   });
 
-  it('toOpenAIModelList returns the OpenAI shape', () => {
+  it('toOpenAIModelList returns the OpenAI shape with base ids', () => {
     const listing = toOpenAIModelList();
     expect(listing.object).toBe('list');
-    expect(listing.data).toHaveLength(14);
+    expect(listing.data).toHaveLength(7);
+    expect(listing.data.map((entry) => entry.id)).toContain('gemini-3.8-flash');
     for (const model of listing.data) {
       expect(model.object).toBe('model');
       expect(typeof model.id).toBe('string');

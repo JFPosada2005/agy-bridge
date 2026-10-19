@@ -208,7 +208,7 @@ describe('agy-bridge V2 plugin contract', () => {
     expect(typeof mod.default.setup).toBe('function');
   });
 
-  it('registers the provider and all V1 models only when absent', async () => {
+  it('registers one model per family with variants and migrates the V1 surface', async () => {
     const bridge = await startBridge({ token: null, validProof: false });
     const plugin = await loadV2(bridge.port);
     const fake = makeContext();
@@ -230,21 +230,32 @@ describe('agy-bridge V2 plugin contract', () => {
       package: '@opencode/ai/providers/openai-compatible',
       settings: { baseURL: `http://127.0.0.1:${bridge.port}/v1` },
     });
-    expect(added[0].models).toHaveLength(14);
-    const flash = added[0].models.find((model: any) => model.modelID === 'gemini-3.8-flash-low');
+    expect(added[0].models).toHaveLength(7);
+    const flash = added[0].models.find((model: any) => model.modelID === 'gemini-3.8-flash');
     expect(flash).toMatchObject({
-      id: 'gemini-3.8-flash-low',
+      id: 'gemini-3.8-flash',
       providerID: 'agy-bridge',
-      name: 'Gemini 3.8 Flash (Low)',
+      name: 'Gemini 3.8 Flash',
       limit: { context: 1_048_576, output: 65_536 },
       capabilities: { tools: true },
     });
+    expect(flash?.variants).toEqual([
+      { id: 'low', settings: { reasoningEffort: 'low' } },
+      { id: 'medium', settings: { reasoningEffort: 'medium' } },
+      { id: 'high', settings: { reasoningEffort: 'high' } },
+    ]);
+    const gpt = added[0].models.find((model: any) => model.modelID === 'gpt-oss-120b');
+    expect(gpt).toMatchObject({ settings: { reasoningEffort: 'medium' }, variants: [] });
+    expect(added[0].models.some((model: any) => model.modelID === 'gemini-3.8-flash-low')).toBe(false);
 
-    // User-defined provider: never replaced; only missing models are appended.
-    const existingModel = { modelID: 'gemini-3.6-flash-low', name: 'User override' };
+    // Existing V1 surface: legacy per-effort ids are removed, the base model
+    // keeps user fields and gets variants, unknown models are preserved.
+    const legacy = { modelID: 'gemini-3.8-flash-low', name: 'Old low' };
+    const base = { modelID: 'gemini-3.8-flash', name: 'My flash', limit: { context: 123, output: 45 } };
+    const userModel = { modelID: 'my-custom-model', name: 'Mine' };
     let setModels: any[] | undefined;
     fake.transforms[0]({
-      get: () => ({ models: new Map([[existingModel.modelID, existingModel]]) }),
+      get: () => ({ models: new Map([legacy, base, userModel].map((model) => [model.modelID, model])) }),
       add: () => {
         throw new Error('add must not run when the provider exists');
       },
@@ -254,10 +265,15 @@ describe('agy-bridge V2 plugin contract', () => {
         },
       },
     });
-    expect(setModels).toHaveLength(14);
-    expect(setModels?.[0]).toBe(existingModel);
+    expect(setModels).toHaveLength(8); // 7 base models + the user model
+    expect(setModels?.map((model) => model.modelID)).not.toContain('gemini-3.8-flash-low');
+    expect(setModels?.map((model) => model.modelID)).toContain('my-custom-model');
+    const migrated = setModels?.find((model) => model.modelID === 'gemini-3.8-flash');
+    expect(migrated).toMatchObject({ name: 'My flash', limit: { context: 123, output: 45 } });
+    expect(migrated?.variants).toHaveLength(3);
+    expect(setModels?.find((model) => model.modelID === 'my-custom-model')).toBe(userModel);
 
-    // Fully present provider: no inventory rewrite.
+    // Fully migrated provider: no inventory rewrite (stable transform).
     let rewrites = 0;
     const all = new Map(added[0].models.map((model: any) => [model.modelID, model]));
     fake.transforms[0]({

@@ -225,4 +225,33 @@ describe('WarmLaneManager (fake agy, zero live agy)', () => {
     // The stuck process was killed by the cap.
     expect(manager.laneCount).toBe(0);
   });
+
+  it('recycles the lane when the reasoning effort changes', async () => {
+    const { impl, probe } = fakeSpawn((turn) => RESPOND(`ANS${turn}`)(turn));
+    let effort = 'low';
+    const manager = new WarmLaneManager(
+      () => ({ model: 'gemini-3.8-flash', effort }),
+      WARM_LANE_DEFAULTS,
+      impl,
+    );
+    const r1 = await manager.runTurn(
+      'ses-effort',
+      request({ model: 'gemini-3.8-flash', effort: 'low' }),
+    );
+    expect(r1?.text).toBe('ANS1');
+    expect(probe.spawnCalls).toBe(1);
+    expect(probe.lastArgs?.[probe.lastArgs.indexOf('--effort') + 1]).toBe('low');
+    const firstChild = probe.child;
+
+    effort = 'high';
+    const r2 = await manager.runTurn(
+      'ses-effort',
+      request({ model: 'gemini-3.8-flash', effort: 'high' }),
+    );
+    expect(r2?.text).toBe('ANS1'); // the replacement process starts its own turn 1
+    expect(probe.spawnCalls).toBe(2); // --effort is spawn-time: recycle
+    expect(probe.lastArgs?.[probe.lastArgs.indexOf('--effort') + 1]).toBe('high');
+    expect((firstChild as unknown as FakeChild).killed).toBe(true);
+    expect((probe.child as unknown as FakeChild).killed).toBe(false);
+  });
 });

@@ -1282,7 +1282,38 @@ export function buildApp(options: BridgeOptions = {}): FastifyInstance {
         ),
       );
     }
-    const { baseModel, effort } = parseEffort(requestedModel);
+    const { baseModel, effort: suffixEffort } = parseEffort(requestedModel);
+    // Reasoning effort is selected per request: a legacy model suffix wins
+    // (V1 configs), otherwise the OpenAI reasoning_effort field (what OpenCode
+    // V2 sends for a model variant), otherwise the model's default.
+    const rawEffort = body['reasoning_effort'];
+    let effort: Effort | null = suffixEffort;
+    if (!effort && rawEffort !== undefined && rawEffort !== null) {
+      const requestedEffort = typeof rawEffort === 'string' ? rawEffort.trim().toLowerCase() : '';
+      if (!catalogEntry.efforts.includes(requestedEffort as Effort)) {
+        logBridgeLine(
+          'POST',
+          chatPath,
+          400,
+          chatIdentity.sessionId,
+          chatIdentity.agent,
+          chatIdentity.msgId,
+          'err=invalid_reasoning_effort',
+        );
+        const supported = catalogEntry.efforts.length > 0 ? catalogEntry.efforts.join(', ') : 'none';
+        return reply.code(400).send(
+          errorBody(
+            `reasoning_effort '${requestedEffort}' is not supported for model '${requestedModel}'. Supported: ${supported}.`,
+            'invalid_reasoning_effort',
+            'invalid_request_error',
+          ),
+        );
+      }
+      effort = requestedEffort as Effort;
+    }
+    if (!effort) {
+      effort = catalogEntry.defaultEffort;
+    }
 
     const toolDefs = parseToolDefinitions(body['tools']);
     const toolsMode = toolDefs.length > 0;
@@ -1330,7 +1361,7 @@ export function buildApp(options: BridgeOptions = {}): FastifyInstance {
         chatIdentity.sessionId,
         chatIdentity.agent,
         chatIdentity.msgId,
-        `bytes=${Buffer.byteLength(prompt, 'utf8')} model=${requestedModel} ${toolNamesTag}`,
+        `bytes=${Buffer.byteLength(prompt, 'utf8')} model=${requestedModel} effort=${effort ?? '-'} ${toolNamesTag}`,
       );
     }
 

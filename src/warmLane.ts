@@ -124,6 +124,15 @@ export class WarmLane {
     this.conversationId = seededConversationId;
   }
 
+  /** True when this process was spawned for the same model/effort/workspace. */
+  matchesSpawn(model: string, effort: string | null, workspaceDir?: string): boolean {
+    return (
+      this.model === model &&
+      this.effort === effort &&
+      (this.workspaceDir ?? undefined) === (workspaceDir ?? undefined)
+    );
+  }
+
   /** Spawn once; throws when the binary cannot start at all. */
   ensureSpawned(): void {
     if (this.child) {
@@ -591,6 +600,13 @@ export class WarmLaneManager {
         return null; // never queue on warm; caller falls back (mutex semantics)
       }
       if (!entry.lane.alive) {
+        entry.lane.destroy();
+        this.drop(sessionID);
+      } else if (!entry.lane.matchesSpawn(spawnInfo.model, spawnInfo.effort, spawnInfo.workspaceDir)) {
+        // A different model, reasoning effort or workspace cannot be applied
+        // to a running agy process (--model/--effort are spawn-time flags):
+        // recycle it and let the creation path below spawn the new one with
+        // the same branch conversation id.
         entry.lane.destroy();
         this.drop(sessionID);
       } else if (

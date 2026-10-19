@@ -333,41 +333,65 @@ async function ensureDaemon(logPath: string | null): Promise<boolean> {
 // a user-defined provider/model is never clobbered).
 // ---------------------------------------------------------------------------
 
-// Mirrors the V1 model surface so a fresh install matches the same model IDs,
-// display names and documented limits (see plugins/agy-bridge.ts).
-const AGY_MODELS: Record<string, { name: string; context: number; output: number }> = {
-  "gemini-3.1-pro-high": { name: "Gemini 3.1 Pro (High)", context: 1_048_576, output: 65_536 },
-  "gemini-3.1-pro-low": { name: "Gemini 3.1 Pro (Low)", context: 1_048_576, output: 65_536 },
-  "gemini-3.8-flash-high": { name: "Gemini 3.8 Flash (High)", context: 1_048_576, output: 65_536 },
-  "gemini-3.8-flash-medium": { name: "Gemini 3.8 Flash (Medium)", context: 1_048_576, output: 65_536 },
-  "gemini-3.8-flash-low": { name: "Gemini 3.8 Flash (Low)", context: 1_048_576, output: 65_536 },
-  "gemini-3.7-flash-high": { name: "Gemini 3.7 Flash (High)", context: 1_048_576, output: 65_536 },
-  "gemini-3.7-flash-medium": { name: "Gemini 3.7 Flash (Medium)", context: 1_048_576, output: 65_536 },
-  "gemini-3.7-flash-low": { name: "Gemini 3.7 Flash (Low)", context: 1_048_576, output: 65_536 },
-  "gemini-3.6-flash-high": { name: "Gemini 3.6 Flash (High)", context: 1_048_576, output: 65_536 },
-  "gemini-3.6-flash-medium": { name: "Gemini 3.6 Flash (Medium)", context: 1_048_576, output: 65_536 },
-  "gemini-3.6-flash-low": { name: "Gemini 3.6 Flash (Low)", context: 1_048_576, output: 65_536 },
-  "claude-sonnet-4-6": { name: "Claude Sonnet 4.6 (Thinking)", context: 1_000_000, output: 128_000 },
-  "claude-opus-4-6-thinking": { name: "Claude Opus 4.6 (Thinking)", context: 1_000_000, output: 128_000 },
-  "gpt-oss-120b-medium": { name: "GPT-OSS 120B (Medium)", context: 131_072, output: 131_072 },
+// One entry per model family. Reasoning effort is a V2 model variant
+// (agy-bridge/gemini-3.8-flash#high), which OpenCode applies as the OpenAI
+// `reasoning_effort` field; the daemon translates it to the agy --effort flag.
+const AGY_MODELS: Record<
+  string,
+  { name: string; context: number; output: number; efforts: string[]; defaultEffort?: string }
+> = {
+  "gemini-3.8-flash": { name: "Gemini 3.8 Flash", context: 1_048_576, output: 65_536, efforts: ["low", "medium", "high"] },
+  "gemini-3.7-flash": { name: "Gemini 3.7 Flash", context: 1_048_576, output: 65_536, efforts: ["low", "medium", "high"] },
+  "gemini-3.6-flash": { name: "Gemini 3.6 Flash", context: 1_048_576, output: 65_536, efforts: ["low", "medium", "high"] },
+  "gemini-3.1-pro": { name: "Gemini 3.1 Pro", context: 1_048_576, output: 65_536, efforts: ["low", "high"] },
+  "claude-sonnet-4-6": { name: "Claude Sonnet 4.6 (Thinking)", context: 1_000_000, output: 128_000, efforts: [] },
+  "claude-opus-4-6-thinking": { name: "Claude Opus 4.6 (Thinking)", context: 1_000_000, output: 128_000, efforts: [] },
+  "gpt-oss-120b": { name: "GPT-OSS 120B", context: 131_072, output: 131_072, efforts: ["medium"], defaultEffort: "medium" },
 }
 
+// V1 surfaced one model per effort level. Those ids remain valid daemon
+// aliases (V1 configs keep working) but are removed from the V2 surface so
+// each family is one selectable model with variants.
+const LEGACY_MODEL_IDS = [
+  "gemini-3.8-flash-high",
+  "gemini-3.8-flash-medium",
+  "gemini-3.8-flash-low",
+  "gemini-3.7-flash-high",
+  "gemini-3.7-flash-medium",
+  "gemini-3.7-flash-low",
+  "gemini-3.6-flash-high",
+  "gemini-3.6-flash-medium",
+  "gemini-3.6-flash-low",
+  "gemini-3.1-pro-high",
+  "gemini-3.1-pro-low",
+  "gpt-oss-120b-medium",
+]
+
 function buildModelInfos(): any[] {
-  return Object.entries(AGY_MODELS).map(([modelID, model]) => ({
-    id: modelID,
-    modelID,
-    providerID: AGY_PROVIDER_ID,
-    name: model.name,
-    // V1 provider models were text models; capabilities are only claimed when
-    // the bridge actually relays that modality.
-    capabilities: { tools: true, input: ["text"], output: ["text"] },
-    variants: [],
-    time: { released: 0 },
-    cost: [],
-    status: "active",
-    enabled: true,
-    limit: { context: model.context, output: model.output },
-  }))
+  return Object.entries(AGY_MODELS).map(([modelID, model]) => {
+    // A single-effort model adds no variant (the base request carries its
+    // default); two or more efforts become selectable variants.
+    const variants =
+      model.efforts.length > 1
+        ? model.efforts.map((effort) => ({ id: effort, settings: { reasoningEffort: effort } }))
+        : []
+    return {
+      id: modelID,
+      modelID,
+      providerID: AGY_PROVIDER_ID,
+      name: model.name,
+      // V1 provider models were text models; capabilities are only claimed when
+      // the bridge actually relays that modality.
+      capabilities: { tools: true, input: ["text"], output: ["text"] },
+      variants,
+      time: { released: 0 },
+      cost: [],
+      status: "active",
+      enabled: true,
+      limit: { context: model.context, output: model.output },
+      ...(model.defaultEffort ? { settings: { reasoningEffort: model.defaultEffort } } : {}),
+    }
+  })
 }
 
 function registerProvider(editor: V2ProviderEditor): void {
@@ -387,12 +411,40 @@ function registerProvider(editor: V2ProviderEditor): void {
       })
       return
     }
-    // Add-only: keep every user-defined model untouched and append only the
-    // ones this release adds. A model removed by the user stays removed.
-    const present = new Set<string>(Array.from(existing.models.keys()))
-    const missing = models.filter((model) => !present.has(model.modelID))
-    if (missing.length > 0) {
-      editor.models.set(AGY_PROVIDER_ID, [...Array.from(existing.models.values()), ...missing])
+    // Migrate the V2 surface in place: remove the V1 per-effort ids, preserve
+    // every user-defined model and field, and fill the variants this release
+    // owns only when the model has none. A user-defined variant wins.
+    const legacy = new Set(LEGACY_MODEL_IDS)
+    const next: any[] = []
+    const present = new Set<string>()
+    let changed = false
+    for (const [id, model] of existing.models) {
+      if (legacy.has(id)) {
+        changed = true
+        continue
+      }
+      const replacement = models.find((candidate) => candidate.modelID === id)
+      if (replacement) {
+        present.add(id)
+        const hasVariants = Array.isArray(model.variants) && model.variants.length > 0
+        if (!hasVariants && replacement.variants.length > 0) {
+          next.push({ ...model, variants: replacement.variants })
+          changed = true
+        } else {
+          next.push(model)
+        }
+      } else {
+        next.push(model)
+      }
+    }
+    for (const model of models) {
+      if (!present.has(model.modelID)) {
+        next.push(model)
+        changed = true
+      }
+    }
+    if (changed) {
+      editor.models.set(AGY_PROVIDER_ID, next)
     }
   } catch {
     // A transform must never throw: a provider registration failure cannot
