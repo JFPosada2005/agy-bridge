@@ -63,6 +63,7 @@ function forEachProperty(node, key, callback) {
 function memberRange(text, node) {
   let start = node.offset
   let end = node.offset + node.length
+  let followingComment = false
 
   let after = end
   while (after < text.length && WHITESPACE.test(text[after])) after += 1
@@ -72,6 +73,7 @@ function memberRange(text, node) {
       commaEnd += 1
     }
     end = commaEnd
+    followingComment = text.startsWith("//", end) || text.startsWith("/*", end)
   } else {
     let before = start - 1
     while (before >= 0 && WHITESPACE.test(text[before])) before -= 1
@@ -85,7 +87,16 @@ function memberRange(text, node) {
   while (lineStart > 0 && text[lineStart - 1] !== "\n" && text[lineStart - 1] !== "\r") {
     lineStart -= 1
   }
-  if (/^[ \t]*$/.test(text.slice(lineStart, start))) start = lineStart
+  const canExpand = /^[ \t]*$/.test(text.slice(lineStart, start)) && !followingComment
+  if (canExpand) {
+    start = lineStart
+    // Remove the now-empty line so the edit does not leave a blank line.
+    let lineEnd = end
+    while (lineEnd < text.length && (text[lineEnd] === " " || text[lineEnd] === "\t")) lineEnd += 1
+    if (text[lineEnd] === "\r" && text[lineEnd + 1] === "\n") lineEnd += 2
+    else if (text[lineEnd] === "\n" || text[lineEnd] === "\r") lineEnd += 1
+    end = lineEnd
+  }
 
   return { start, end }
 }
@@ -222,11 +233,13 @@ const isMain =
 if (isMain) {
   let removed = 0
   let removedPluginEntries = 0
+  let invalidFiles = 0
   for (const file of parseArgs(process.argv.slice(2))) {
     try {
       const result = migrateFile(file)
       if (result.skipped) continue
       if (result.invalid) {
+        invalidFiles += 1
         console.log(`Skipped ${file}: not valid JSONC (no changes written).`)
         continue
       }
@@ -244,7 +257,7 @@ if (isMain) {
       console.log(`Could not migrate ${file} (non-fatal): ${error instanceof Error ? error.message : String(error)}`)
     }
   }
-  if (removed === 0 && removedPluginEntries === 0) {
+  if (removed === 0 && removedPluginEntries === 0 && invalidFiles === 0) {
     console.log("agy-bridge config surface already migrated.")
   }
 }

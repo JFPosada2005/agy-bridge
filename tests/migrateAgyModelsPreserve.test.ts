@@ -14,9 +14,17 @@ describe('S14 preservation', () => {
     const { text } = migrateConfigText(
       wrap('        "gemini-3.8-flash-low": {},\n        // my model note\n        "my-custom": { "name": "Mine" }'),
     );
-    expect(text).toContain('// my model note');
+    expect(text).toContain('        // my model note');
     expect(text).toContain('"my-custom": { "name": "Mine" }');
     expect(text).not.toContain('gemini-3.8-flash-low');
+  });
+
+  it('does not leave a blank line when a removed entry had a comma', () => {
+    const { text } = migrateConfigText(
+      wrap('        "gemini-3.8-flash-low": {},\n        "keep": {}'),
+    );
+    expect(text).not.toMatch(/\n[ \t]*\n[ \t]*"keep"/);
+    expect(text).toContain('"keep"');
   });
 
   it('does not reformat a neighbouring inline model', () => {
@@ -122,7 +130,11 @@ describe('S14 preservation', () => {
     const file = join(dir, 'opencode.json');
     const src = '{ "provider": { "agy-bridge": { "models": { "gemini-3.8-flash-low": {} } } ';
     writeFileSync(file, src, 'utf8');
-    execFileSync(process.execPath, ['scripts/migrate-agy-models.mjs', '--config', file]);
+    const output = execFileSync(process.execPath, ['scripts/migrate-agy-models.mjs', '--config', file], {
+      encoding: 'utf8',
+    });
+    expect(output).toContain('not valid JSONC');
+    expect(output).not.toContain('already migrated');
     expect(readFileSync(file, 'utf8')).toBe(src);
     expect(() => readFileSync(`${file}.agy-bridge.bak`, 'utf8')).toThrow();
   });
