@@ -101,4 +101,48 @@ describe('reasoning_effort request selection', () => {
     expect(seen).toHaveLength(0);
     await app.close();
   });
+
+  it('rejects a legacy suffix the family does not support', async () => {
+    const seen: Seen = [];
+    const app = buildApp({ adapter: recordingAdapter(seen) });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: { model: 'gemini-3.1-pro-medium', messages },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()?.error?.code).toBe('invalid_reasoning_effort');
+    expect(response.json()?.error?.message).toContain('Supported: low, high.');
+    expect(seen).toHaveLength(0);
+    await app.close();
+  });
+
+  it('rejects a suffix on a family with no effort control', async () => {
+    const seen: Seen = [];
+    const app = buildApp({ adapter: recordingAdapter(seen) });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: { model: 'claude-sonnet-4-6-high', messages },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()?.error?.code).toBe('invalid_reasoning_effort');
+    expect(seen).toHaveLength(0);
+    await app.close();
+  });
+
+  it('rejects a non-string reasoning_effort with a clear message', async () => {
+    const seen: Seen = [];
+    const app = buildApp({ adapter: recordingAdapter(seen) });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: { model: 'gemini-3.8-flash', reasoning_effort: 3, messages },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()?.error?.code).toBe('invalid_reasoning_effort');
+    expect(response.json()?.error?.message).toBe('reasoning_effort must be a string.');
+    expect(seen).toHaveLength(0);
+    await app.close();
+  });
 });

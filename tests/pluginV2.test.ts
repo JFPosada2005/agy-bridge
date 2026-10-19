@@ -13,7 +13,16 @@ import { loadOrCreateToken } from '../src/security';
 // V1 identity/lifecycle behavior through the V2 domains.
 
 process.env.AGY_WARM_LANE = '0';
-const ENV_KEYS = ['AGY_BRIDGE_PORT', 'AGY_BRIDGE_HOME', 'AGY_BRIDGE_REPO', 'AGY_BRIDGE_NODE', 'USERPROFILE', 'HOME'] as const;
+const ENV_KEYS = [
+  'AGY_BRIDGE_PORT',
+  'AGY_BRIDGE_HOME',
+  'AGY_BRIDGE_REPO',
+  'AGY_BRIDGE_NODE',
+  'AGY_BRIDGE_SPAWN_POLL_MS',
+  'AGY_BRIDGE_SPAWN_ATTEMPTS',
+  'USERPROFILE',
+  'HOME',
+] as const;
 
 type V2Module = {
   default: {
@@ -389,7 +398,13 @@ describe('agy-bridge V2 plugin contract', () => {
       type: 'session.deleted',
       data: { sessionID: 'ses_child', location: { directory: 'C:/project' } },
     });
+    fake.push({
+      type: 'session.deleted',
+      data: { sessionID: 'ses_other', location: { directory: 'D:/elsewhere' } },
+    });
     await waitFor(() => bridge.requests.length > 0);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(bridge.requests).toHaveLength(1);
     const tombstone = bridge.requests[0];
     expect(tombstone.url).toBe('/v1/__session/tombstone');
     expect(tombstone.method).toBe('POST');
@@ -407,6 +422,18 @@ describe('agy-bridge V2 plugin contract', () => {
     await cleanup();
     expect(fake.signal()?.aborted).toBe(true);
     expect(fake.hooks.size).toBe(0);
+  });
+
+  it('survives a missing daemon binary without an unhandled spawn error', async () => {
+    process.env.AGY_BRIDGE_SPAWN_POLL_MS = '5';
+    process.env.AGY_BRIDGE_SPAWN_ATTEMPTS = '1';
+    process.env.AGY_BRIDGE_NODE = join(root, 'no-such-node');
+    vi.resetModules();
+    const plugin = await loadV2(1);
+    const fake = makeContext();
+    const cleanup = await plugin.setup(fake.ctx);
+    expect(typeof cleanup).toBe('function');
+    await cleanup();
   });
 
   it('never throws when the V2 domains fail during setup', async () => {

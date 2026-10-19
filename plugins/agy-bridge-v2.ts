@@ -40,6 +40,10 @@ let impostorWarned = false
 const BRIDGE_DIR =
   process.env.AGY_BRIDGE_REPO ?? `${process.env.LOCALAPPDATA ?? "."}\\agy-bridge`
 const WATCHDOG_INTERVAL_MS = 30_000
+// Testability: the spawn wait is bounded; the defaults match V1 (40 x 250 ms).
+// A test can shorten it to assert the spawn-error path without a 10 s wait.
+const SPAWN_POLL_MS = Number(process.env.AGY_BRIDGE_SPAWN_POLL_MS ?? "") || 250
+const SPAWN_ATTEMPTS = Number(process.env.AGY_BRIDGE_SPAWN_ATTEMPTS ?? "") || 40
 const AGY_PROVIDER_ID = "agy-bridge"
 const AGY_PROTOCOL_VERSION = "1"
 
@@ -191,11 +195,12 @@ async function ensureBridgeLogDir(logPath: string | null): Promise<void> {
   }
 }
 
-const spawnDaemon = async (logPath: string | null): Promise<boolean> => {
+const spawnDaemon = async (logPath: string | null, signal?: AbortSignal): Promise<boolean> => {
+  if (signal?.aborted) return false
   try {
     const node = process.env.AGY_BRIDGE_NODE || "C:\\Program Files\\nodejs\\node.exe"
     const { spawn } = await import("node:child_process")
-    spawn(node, ["dist/index.js"], {
+    const child = spawn(node, ["dist/index.js"], {
       cwd: BRIDGE_DIR,
       stdio: "ignore",
       detached: true,
@@ -206,8 +211,15 @@ const spawnDaemon = async (logPath: string | null): Promise<boolean> => {
         AGY_SESSION_MODE: "1",
       },
     })
-    for (let i = 0; i < 40; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 250))
+    // A missing binary or cwd emits 'error' on the child. Without this
+    // listener Node throws an unhandled 'error' event in the host process.
+    child.on("error", (error) => {
+      console.error("[agy-bridge] daemon spawn failed:", error)
+    })
+    child.unref?.()
+    for (let i = 0; i < SPAWN_ATTEMPTS; i++) {
+      await new Promise((resolve) => setTimeout(resolve, SPAWN_POLL_MS))
+      if (signal?.aborted) return false
       if (!currentToken) currentToken = await loadOrCreateToken()
       if ((await healthInfo(currentToken)).verified) {
         daemonVerified = true
@@ -215,7 +227,7 @@ const spawnDaemon = async (logPath: string | null): Promise<boolean> => {
         return true
       }
     }
-    console.error("[agy-bridge] daemon did not become healthy in 10s; check `npm run start` in the agy-bridge repo")
+    console.error("[agy-bridge] daemon did not become healthy; check `npm run start` in the agy-bridge repo")
   } catch (error) {
     console.error("[agy-bridge] daemon bootstrap failed:", error)
   }
@@ -291,12 +303,13 @@ async function healthInfo(token: string | null): Promise<HealthInfo> {
 // Stale-daemon handshake (V1 parity): healthz 200 alone can hide an old build.
 // On buildId mismatch with ZERO in-flight turns, restart with current code;
 // with turns in flight, defer to the next watchdog tick.
-async function ensureDaemon(logPath: string | null): Promise<boolean> {
+async function ensureDaemon(logPath: string | null, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return false
   if (!currentToken) currentToken = await loadOrCreateToken()
   let health = await healthInfo(currentToken)
   if (!health.ok) {
     daemonVerified = false
-    return spawnDaemon(logPath)
+    return signal?.aborted ? false : spawnDaemon(logPath, signal)
   }
   if (!health.verified) {
     // The daemon may have replaced a malformed/deleted token file: re-read once.
@@ -320,6 +333,7 @@ async function ensureDaemon(logPath: string | null): Promise<boolean> {
     health.pid &&
     health.pid !== process.pid
   ) {
+    if (signal?.aborted) return false
     daemonVerified = false
     try {
       process.kill(health.pid)
@@ -327,7 +341,7 @@ async function ensureDaemon(logPath: string | null): Promise<boolean> {
       // Already gone; the respawn below recreates it.
     }
     await new Promise((resolve) => setTimeout(resolve, 500))
-    return spawnDaemon(logPath)
+    return signal?.aborted ? false : spawnDaemon(logPath, signal)
   }
   return true
 }
@@ -654,10 +668,10 @@ async function setupAgyBridgeV2(ctx: V2Context): Promise<() => Promise<void>> {
     await ensureBridgeLogDir(logPath)
     // Parity with V1: the token handshake is complete before the first model
     // request can be issued with a token header.
-    await ensureDaemon(logPath)
+    await ensureDaemon(logPath, abort.signal)
     if (!disposed) {
       timer = setInterval(() => {
-        if (!disposed) void ensureDaemon(logPath)
+        if (!disposed) void ensureDaemon(logPath, abort.signal)
       }, WATCHDOG_INTERVAL_MS)
       timer.unref?.()
     }

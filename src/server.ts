@@ -1283,14 +1283,37 @@ export function buildApp(options: BridgeOptions = {}): FastifyInstance {
       );
     }
     const { baseModel, effort: suffixEffort } = parseEffort(requestedModel);
+    const supported = catalogEntry.efforts.length > 0 ? catalogEntry.efforts.join(', ') : 'none';
+    const rejectEffort = (requestedEffort: string) => {
+      logBridgeLine(
+        'POST',
+        chatPath,
+        400,
+        chatIdentity.sessionId,
+        chatIdentity.agent,
+        chatIdentity.msgId,
+        'err=invalid_reasoning_effort',
+      );
+      return reply.code(400).send(
+        errorBody(
+          `reasoning_effort '${requestedEffort}' is not supported for model '${requestedModel}'. Supported: ${supported}.`,
+          'invalid_reasoning_effort',
+          'invalid_request_error',
+        ),
+      );
+    };
+    // A legacy model suffix is still validated against the family: an
+    // unsupported suffix must not reach agy as an unknown --effort value.
+    if (suffixEffort && !catalogEntry.efforts.includes(suffixEffort)) {
+      return rejectEffort(suffixEffort);
+    }
     // Reasoning effort is selected per request: a legacy model suffix wins
     // (V1 configs), otherwise the OpenAI reasoning_effort field (what OpenCode
     // V2 sends for a model variant), otherwise the model's default.
     const rawEffort = body['reasoning_effort'];
     let effort: Effort | null = suffixEffort;
     if (!effort && rawEffort !== undefined && rawEffort !== null) {
-      const requestedEffort = typeof rawEffort === 'string' ? rawEffort.trim().toLowerCase() : '';
-      if (!catalogEntry.efforts.includes(requestedEffort as Effort)) {
+      if (typeof rawEffort !== 'string') {
         logBridgeLine(
           'POST',
           chatPath,
@@ -1300,14 +1323,17 @@ export function buildApp(options: BridgeOptions = {}): FastifyInstance {
           chatIdentity.msgId,
           'err=invalid_reasoning_effort',
         );
-        const supported = catalogEntry.efforts.length > 0 ? catalogEntry.efforts.join(', ') : 'none';
         return reply.code(400).send(
           errorBody(
-            `reasoning_effort '${requestedEffort}' is not supported for model '${requestedModel}'. Supported: ${supported}.`,
+            'reasoning_effort must be a string.',
             'invalid_reasoning_effort',
             'invalid_request_error',
           ),
         );
+      }
+      const requestedEffort = rawEffort.trim().toLowerCase();
+      if (!catalogEntry.efforts.includes(requestedEffort as Effort)) {
+        return rejectEffort(requestedEffort);
       }
       effort = requestedEffort as Effort;
     }
