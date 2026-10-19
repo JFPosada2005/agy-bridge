@@ -32,6 +32,29 @@ try {
         return $true
     }
 
+    # Remove one string entry from the V1 "plugin" array without rewriting the
+    # rest of the file. The config is JSON/JSONC that may contain duplicate
+    # keys and comments, so parse-and-write would destroy user content; this
+    # edits only the exact entry line and its comma.
+    function Remove-V1PluginEntry {
+        param([string]$ConfigPath, [string]$Entry)
+        if (-not (Test-Path $ConfigPath)) { return $false }
+        $text = [System.IO.File]::ReadAllText($ConfigPath)
+        $quoted = [regex]::Escape('"' + $Entry + '"')
+        $patterns = @(
+            "(?m)^[ \t]*$quoted[ \t]*,[ \t]*\r?\n",
+            "(?m),[ \t]*\r?\n[ \t]*$quoted[ \t]*(?=\r?\n[ \t]*\])"
+        )
+        foreach ($pattern in $patterns) {
+            $updated = [regex]::Replace($text, $pattern, '', 1)
+            if ($updated -ne $text) {
+                [System.IO.File]::WriteAllText($ConfigPath, $updated)
+                return $true
+            }
+        }
+        return $false
+    }
+
     # --- 0. Prerequisite checks run FIRST in every mode (fail fast before any
     # git traffic or files are downloaded) ---
     # a. Node.js check (the project engines.node field requires >= 24)
@@ -55,6 +78,32 @@ try {
         throw "Antigravity CLI not found at $AgyExe. Install and sign in to the Antigravity desktop app so the agy CLI exists, then re-run this script."
     }
     Write-Host "Antigravity CLI check passed: $AgyExe"
+
+    # c. OpenCode detection: V1 and V2 load different plugin APIs and
+    # directories. V2 also discovers plugin\ for compatibility, but V1 plugin
+    # code cannot run there, so deploying the V1 file on a V2 host would only
+    # produce a loader error.
+    $OpenCodeCmd = Get-Command opencode -ErrorAction SilentlyContinue
+    $OpenCodeMajor = 0
+    $OpenCodeVersion = "not found"
+    if ($OpenCodeCmd) {
+        $OpenCodeVersion = (opencode --version 2>&1 | Out-String).Trim()
+        if ($OpenCodeVersion -match "v?(\d+)\.") {
+            $OpenCodeMajor = [int]$Matches[1]
+        }
+    }
+    $UseV2Plugin = ($OpenCodeMajor -ge 2)
+    if ($OpenCodeCmd) {
+        if ($UseV2Plugin) {
+            Write-Host "OpenCode check passed: $OpenCodeVersion (V2 plugin API)"
+        }
+        else {
+            Write-Host "OpenCode check passed: $OpenCodeVersion (V1 plugin API)"
+        }
+    }
+    else {
+        Write-Host "WARNING: 'opencode' was not found on PATH; assuming the V1 plugin path. Install OpenCode V2 and re-run to get the V2 plugin."
+    }
 
     # --- 1. Source-mode detection: running from inside an extracted repo? ---
     # NOTE: under `irm https://... | iex` there is no $PSScriptRoot at all (the
@@ -113,7 +162,12 @@ try {
     }
 
     # --- 3. Build (two separate commands; PowerShell 5.1 has no && chaining) ---
-    $PluginSrc = Join-Path $RepoRoot "plugins\agy-bridge.ts"
+    if ($UseV2Plugin) {
+        $PluginSrc = Join-Path $RepoRoot "plugins\agy-bridge-v2.ts"
+    }
+    else {
+        $PluginSrc = Join-Path $RepoRoot "plugins\agy-bridge.ts"
+    }
     if (-not (Test-Path $PluginSrc)) {
         throw "Plugin source not found at $PluginSrc. The repo checkout looks incomplete."
     }
@@ -143,7 +197,14 @@ try {
     }
 
     # --- 6. Plugin deploy (copy only when the content changed) ---
-    $PluginDir = Join-Path $env:USERPROFILE ".config\opencode\plugin"
+    # V2 loads local plugins from plugins\ (recommended) and still discovers
+    # the V1 plugin\ directory. V1 loads plugin\.
+    if ($UseV2Plugin) {
+        $PluginDir = Join-Path $env:USERPROFILE ".config\opencode\plugins"
+    }
+    else {
+        $PluginDir = Join-Path $env:USERPROFILE ".config\opencode\plugin"
+    }
     $PluginDst = Join-Path $PluginDir "agy-bridge.ts"
     if (-not (Test-Path $PluginDir)) {
         if (Test-CanProceed $PluginDir "Create plugin directory") {
@@ -165,6 +226,30 @@ try {
             Copy-Item -Path $PluginSrc -Destination $PluginDst -Force
         }
         Write-Host "Plugin updated: $PluginDst"
+    }
+
+    # V2 hosts must not keep the V1 copy: V1 plugin implementations do not run
+    # in V2, so the old file can only produce a loader error. The V1 source
+    # stays in the repo; reinstalling on a V1 host recreates this copy.
+    if ($UseV2Plugin) {
+        $LegacyPlugin = Join-Path $env:USERPROFILE ".config\opencode\plugin\agy-bridge.ts"
+        if (Test-Path $LegacyPlugin) {
+            if (Test-CanProceed $LegacyPlugin "Remove the V1 plugin copy from a V2 host") {
+                Remove-Item -Path $LegacyPlugin -Force -ErrorAction Stop
+            }
+            Write-Host "Retired the V1 plugin copy: $LegacyPlugin"
+        }
+        # A V1 config entry that still points at the retired file makes V2 log
+        # a failed-load warning on every start; remove only that entry.
+        foreach ($ConfigRelative in @(".config\opencode\opencode.json", ".config\opencode\opencode.jsonc")) {
+            $ConfigPath = Join-Path $env:USERPROFILE $ConfigRelative
+            if ((Test-Path $ConfigPath) -and
+                (Test-CanProceed $ConfigPath "Remove the V1 plugin entry")) {
+                if (Remove-V1PluginEntry -ConfigPath $ConfigPath -Entry "./plugin/agy-bridge.ts") {
+                    Write-Host "Removed the V1 plugin entry from $ConfigPath"
+                }
+            }
+        }
     }
 
     # --- 7. Env registration (idempotent) ---
@@ -237,6 +322,12 @@ try {
     Write-Host ""
     Write-Host "agy-bridge install complete."
     Write-Host "Repo: $RepoRoot"
+    if ($UseV2Plugin) {
+        Write-Host "Plugin API: V2 ($OpenCodeVersion)"
+    }
+    else {
+        Write-Host "Plugin API: V1 ($OpenCodeVersion)"
+    }
     Write-Host "Plugin: $PluginDst"
     Write-Host "Next: restart opencode so it loads the plugin."
     Write-Host "The daemon serves 127.0.0.1:41667 (check GET /healthz)."
