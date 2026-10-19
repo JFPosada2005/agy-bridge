@@ -406,6 +406,13 @@ function registerProvider(editor: V2ProviderEditor): void {
   try {
     const models = buildModelInfos()
     const existing = editor.get(AGY_PROVIDER_ID)
+    if (process.env.AGY_BRIDGE_DEBUG === "1") {
+      console.error(
+        `[agy-bridge] provider transform: ${
+          existing ? `provider present with ${existing.models.size} models` : "provider absent"
+        }`,
+      )
+    }
     if (!existing) {
       editor.add({
         info: {
@@ -622,16 +629,23 @@ async function setupAgyBridgeV2(ctx: V2Context): Promise<() => Promise<void>> {
       registrations.push(
         await ctx.model.transform((editor) => {
           try {
+            let removed = 0
             for (const id of LEGACY_MODEL_IDS) {
               if (editor.get(AGY_PROVIDER_ID, id)) {
                 editor.remove(AGY_PROVIDER_ID, id)
+                removed += 1
               }
+            }
+            if (process.env.AGY_BRIDGE_DEBUG === "1") {
+              console.error(`[agy-bridge] model transform removed ${removed} legacy ids`)
             }
           } catch {
             // Transform must never throw.
           }
         }),
       )
+    } else if (process.env.AGY_BRIDGE_DEBUG === "1") {
+      console.error("[agy-bridge] model transform domain unavailable")
     }
 
     listening = listenSessions(ctx, abort.signal, parentBySession, messageBySession)
