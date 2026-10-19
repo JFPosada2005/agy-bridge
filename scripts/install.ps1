@@ -250,6 +250,17 @@ try {
                 }
             }
         }
+        # V1 configs define one model per reasoning effort. V2 merges config
+        # models after plugin transforms, so migrate the file itself to the
+        # family surface (the script preserves JSONC and makes a backup).
+        $MigrateScript = Join-Path $RepoRoot "scripts\migrate-agy-models.mjs"
+        if ((Test-Path $MigrateScript) -and
+            (Test-CanProceed "agy-bridge model entries" "Migrate V1 per-effort models to family models")) {
+            node $MigrateScript
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "WARNING: config model migration exited with code $LASTEXITCODE; legacy model entries may remain."
+            }
+        }
     }
 
     # --- 7. Env registration (idempotent) ---
