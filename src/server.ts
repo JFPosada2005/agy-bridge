@@ -1823,6 +1823,10 @@ export function buildApp(options: BridgeOptions = {}): FastifyInstance {
           (sum, item) => sum + Buffer.byteLength(item, 'utf8'),
           0,
         );
+        const parentTag =
+          chatIdentity.parentSessionId && chatIdentity.parentSessionId !== '-'
+            ? ` parent=${chatIdentity.parentSessionId}`
+            : '';
         logBridgeLine(
           'POST',
           chatPath,
@@ -1830,7 +1834,7 @@ export function buildApp(options: BridgeOptions = {}): FastifyInstance {
           sessionID,
           chatIdentity.agent,
           chatIdentity.msgId,
-          `bytes=${totalBytes} model=${requestedModel} effort=${effort ?? '-'} ${toolNamesTag} session path=${pathLabel} branch=${branch.branchID} epoch=${branch.epoch} turns=${prompts.length}`,
+          `bytes=${totalBytes} model=${requestedModel} effort=${effort ?? '-'} ${toolNamesTag}${parentTag} session path=${pathLabel} branch=${branch.branchID} epoch=${branch.epoch} turns=${prompts.length}`,
         );
         sessionLogSuffix = ` session path=${pathLabel} branch=${branch.branchID} turns=${prompts.length}`;
 
