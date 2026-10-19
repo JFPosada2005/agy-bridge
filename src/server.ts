@@ -1804,7 +1804,7 @@ export function buildApp(options: BridgeOptions = {}): FastifyInstance {
           sessionID,
           chatIdentity.agent,
           chatIdentity.msgId,
-          `bytes=${totalBytes} model=${requestedModel} ${toolNamesTag} session path=${pathLabel} branch=${branch.branchID} epoch=${branch.epoch} turns=${prompts.length}`,
+          `bytes=${totalBytes} model=${requestedModel} effort=${effort ?? '-'} ${toolNamesTag} session path=${pathLabel} branch=${branch.branchID} epoch=${branch.epoch} turns=${prompts.length}`,
         );
         sessionLogSuffix = ` session path=${pathLabel} branch=${branch.branchID} turns=${prompts.length}`;
 
@@ -1847,7 +1847,7 @@ export function buildApp(options: BridgeOptions = {}): FastifyInstance {
               sessionID,
               chatIdentity.agent,
               chatIdentity.msgId,
-              `bytes=${retryPrompts.join('').length} model=${requestedModel} session path=bootstrap-mismatch-retry branch=${branch.branchID} epoch=${branch.epoch} turns=${retryPrompts.length}`,
+              `bytes=${retryPrompts.join('').length} model=${requestedModel} effort=${effort ?? '-'} session path=bootstrap-mismatch-retry branch=${branch.branchID} epoch=${branch.epoch} turns=${retryPrompts.length}`,
             );
             sessionLogSuffix =
               ` session path=bootstrap-mismatch-retry branch=${branch.branchID} turns=${retryPrompts.length}`;

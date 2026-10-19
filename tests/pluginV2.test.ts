@@ -28,6 +28,7 @@ type FakeContext = {
   ctx: any;
   hooks: Map<string, Hook>;
   transforms: Array<(editor: any) => void>;
+  modelTransforms: Array<(editor: any) => void>;
   push: (event: any) => void;
   signal: () => AbortSignal | undefined;
 };
@@ -71,6 +72,7 @@ afterEach(async () => {
 function makeContext(): FakeContext {
   const hooks = new Map<string, Hook>();
   const transforms: Array<(editor: any) => void> = [];
+  const modelTransforms: Array<(editor: any) => void> = [];
   const queue: any[] = [];
   let signal: AbortSignal | undefined;
   const ctx = {
@@ -88,6 +90,12 @@ function makeContext(): FakeContext {
     provider: {
       transform: async (callback: (editor: any) => void) => {
         transforms.push(callback);
+        return { dispose: async () => undefined };
+      },
+    },
+    model: {
+      transform: async (callback: (editor: any) => void) => {
+        modelTransforms.push(callback);
         return { dispose: async () => undefined };
       },
     },
@@ -110,6 +118,7 @@ function makeContext(): FakeContext {
     ctx,
     hooks,
     transforms,
+    modelTransforms,
     push: (event: any) => queue.push(event),
     signal: () => signal,
   };
@@ -288,6 +297,27 @@ describe('agy-bridge V2 plugin contract', () => {
       },
     });
     expect(rewrites).toBe(0);
+  });
+
+  it('hides the legacy per-effort ids from the active model collection', async () => {
+    const bridge = await startBridge({ token: null, validProof: false });
+    const plugin = await loadV2(bridge.port);
+    const fake = makeContext();
+    const cleanup = await plugin.setup(fake.ctx);
+    cleanups.push(cleanup);
+
+    expect(fake.modelTransforms).toHaveLength(1);
+    const removed: string[] = [];
+    fake.modelTransforms[0]({
+      get: (_providerID: string, modelID: string) => ({ modelID }),
+      remove: (_providerID: string, modelID: string) => {
+        removed.push(modelID);
+      },
+    });
+    expect(removed).toHaveLength(12);
+    expect(removed).toContain('gemini-3.8-flash-low');
+    expect(removed).toContain('gpt-oss-120b-medium');
+    expect(removed).not.toContain('gemini-3.8-flash');
   });
 
   it('does not send the token or kill a pid reported by an unverified listener', async () => {

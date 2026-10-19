@@ -65,6 +65,11 @@ interface V2ProviderEditor {
   }
 }
 
+interface V2ModelEditor {
+  get: (providerID: string, modelID: string) => any | undefined
+  remove: (providerID: string, modelID: string) => void
+}
+
 interface V2Context {
   location?: { directory?: string }
   event: {
@@ -75,6 +80,9 @@ interface V2Context {
   }
   provider: {
     transform: (callback: (editor: V2ProviderEditor) => void) => Promise<V2Registration>
+  }
+  model?: {
+    transform: (callback: (editor: V2ModelEditor) => void) => Promise<V2Registration>
   }
 }
 
@@ -604,6 +612,26 @@ async function setupAgyBridgeV2(ctx: V2Context): Promise<() => Promise<void>> {
 
     if (ctx.provider?.transform) {
       registrations.push(await ctx.provider.transform(registerProvider))
+    }
+
+    // The provider transform can only migrate a provider it can see. A
+    // config-defined V1 provider may be merged after plugin setup, so also
+    // hide the legacy per-effort ids from the active model collection. This
+    // is idempotent and leaves every other model untouched.
+    if (ctx.model?.transform) {
+      registrations.push(
+        await ctx.model.transform((editor) => {
+          try {
+            for (const id of LEGACY_MODEL_IDS) {
+              if (editor.get(AGY_PROVIDER_ID, id)) {
+                editor.remove(AGY_PROVIDER_ID, id)
+              }
+            }
+          } catch {
+            // Transform must never throw.
+          }
+        }),
+      )
     }
 
     listening = listenSessions(ctx, abort.signal, parentBySession, messageBySession)
