@@ -18,6 +18,14 @@ const TOOLS = [
     },
   },
   { type: 'function', function: { name: 'list_dir', parameters: { type: 'object' } } },
+  {
+    type: 'function',
+    function: {
+      name: 'skill',
+      description: 'Load a specialized skill.',
+      parameters: { type: 'object', properties: { id: { type: 'string' } } },
+    },
+  },
 ];
 
 const MODEL = 'gemini-3.6-flash-low';
@@ -52,6 +60,35 @@ describe('extractToolCall', () => {
       'read_file',
     ]);
     expect(call).toEqual({ name: 'read_file', arguments: { path: 'a.txt' } });
+  });
+
+  it('parses the natural shorthand form emitted by Gemini', () => {
+    expect(extractToolCall('TOOL_CALL: skill {"id": "docx"}', ['skill'])).toEqual({
+      name: 'skill',
+      arguments: { id: 'docx' },
+    });
+    expect(extractToolCall('TOOL_CALL: read_file {"path": "a.txt"}', ['read_file'])).toEqual({
+      name: 'read_file',
+      arguments: { path: 'a.txt' },
+    });
+    expect(extractToolCall('TOOL_CALL: list_dir', ['list_dir'])).toEqual({
+      name: 'list_dir',
+      arguments: {},
+    });
+    expect(extractToolCall('TOOL_CALL: skill({"id": "docx"})', ['skill'])).toEqual({
+      name: 'skill',
+      arguments: { id: 'docx' },
+    });
+    expect(extractToolCall('TOOL_CALL: skill {"id": "docx"} ```', ['skill'])).toEqual({
+      name: 'skill',
+      arguments: { id: 'docx' },
+    });
+  });
+
+  it('rejects an unknown shorthand name and malformed shorthand arguments', () => {
+    expect(extractToolCall('TOOL_CALL: delete_everything {"x": 1}', ['skill'])).toBeNull();
+    expect(extractToolCall('TOOL_CALL: skill not-json', ['skill'])).toBeNull();
+    expect(extractToolCall('TOOL_CALL: skill ["not","object"]', ['skill'])).toBeNull();
   });
 
   it('defaults missing arguments to {}', () => {
@@ -304,6 +341,81 @@ describe('POST /v1/chat/completions tools mode', () => {
     expect(body).not.toContain('"content":"Hello there."');
     expect(body).toContain('"finish_reason":"stop"');
     expect(body.trimEnd().endsWith('data: [DONE]')).toBe(true);
+    await app.close();
+  });
+
+  it('non-stream: shorthand marker (skill docx) returns tool_calls', async () => {
+    const seen: { prompt?: string; deltas: string[]; onDeltaSeen: boolean } = { deltas: [], onDeltaSeen: false };
+    const app = buildApp({
+      adapter: capturingAdapter('TOOL_CALL: skill {"id": "docx"}', seen),
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: toolPayload([{ role: 'user', content: 'make a docx' }]),
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      choices: Array<{
+        message: { content: string | null; tool_calls: Array<{ function: { name: string; arguments: string } }> };
+        finish_reason: string;
+      }>;
+    };
+    const choice = body.choices[0];
+    expect(choice.finish_reason).toBe('tool_calls');
+    expect(choice.message.content).toBeNull();
+    expect(choice.message.tool_calls[0].function.name).toBe('skill');
+    expect(JSON.parse(choice.message.tool_calls[0].function.arguments)).toEqual({ id: 'docx' });
+    await app.close();
+  });
+
+  it('non-stream: an invalid marker is returned as text, not an empty turn', async () => {
+    const seen: { prompt?: string; deltas: string[]; onDeltaSeen: boolean } = { deltas: [], onDeltaSeen: false };
+    const app = buildApp({ adapter: capturingAdapter('TOOL_CALL: ???', seen) });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: toolPayload([{ role: 'user', content: 'hello' }]),
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      choices: Array<{ message: { content: string }; finish_reason: string }>;
+    };
+    expect(body.choices[0].finish_reason).toBe('stop');
+    expect(body.choices[0].message.content).toBe('TOOL_CALL: ???');
+    await app.close();
+  });
+
+  it('stream: shorthand marker relays tool_calls without leaking marker content', async () => {
+    const seen: { prompt?: string; deltas: string[]; onDeltaSeen: boolean } = { deltas: [], onDeltaSeen: false };
+    const app = buildApp({
+      adapter: capturingAdapter('TOOL_CALL: skill {"id": "docx"}', seen),
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: toolPayload([{ role: 'user', content: 'make a docx' }], true),
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.body;
+    expect(body).toContain('"tool_calls"');
+    expect(body).toContain('"finish_reason":"tool_calls"');
+    expect(body).not.toContain('"content"');
+    expect(body.trimEnd().endsWith('data: [DONE]')).toBe(true);
+    await app.close();
+  });
+
+  it('stream: an invalid marker is preserved as content, not an empty turn', async () => {
+    const seen: { prompt?: string; deltas: string[]; onDeltaSeen: boolean } = { deltas: [], onDeltaSeen: false };
+    const app = buildApp({ adapter: capturingAdapter('TOOL_CALL: ???', seen) });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: toolPayload([{ role: 'user', content: 'hello' }], true),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain('TOOL_CALL: ???');
+    expect(response.body).toContain('"finish_reason":"stop"');
     await app.close();
   });
 

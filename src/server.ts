@@ -23,6 +23,13 @@ import {
 } from './agy';
 import { findModel, parseEffort, toOpenAIModelList } from './catalog';
 import {
+  markerRemainder,
+  parseToolCallMarker,
+  stripTrailingFence,
+  TOOL_CALL_PREFIX,
+} from './toolCallMarker';
+export { TOOL_CALL_PREFIX };
+import {
   ledgerDigests,
   ledgerMessages,
   provisionalDigestForResponse,
@@ -318,8 +325,6 @@ export function buildDeniedCorrectionPrompt(args: {
 }
 
 /** Marker prefix the model must emit (line-leading) to request a tool call. */
-export const TOOL_CALL_PREFIX = 'TOOL_CALL:';
-
 const TOOL_CALL_INSTRUCTIONS = [
   'You may call ONE of the AGENT-CIENT tools below when needed by emitting a single marker line first in your reply: TOOL_CALL: {"name": "<tool name>", "arguments": {<json args>}}.',
   'After the marker line, write nothing else for this turn — the tool will be executed by the client and its result will be sent back in a follow-up request.',
@@ -448,32 +453,15 @@ function buildToolsPreamble(defs: ParsedToolDef[]): string {
   return lines.join('\n');
 }
 
-/**
- * Remainder after the marker prefix, or null when the line is not a marker.
- * The model may legitimately discuss markers in prose, so the guard is
- * strict: after leading whitespace the line must start with the exact
- * instruction prefix `TOOL_CALL:`.
- */
-function markerRemainder(line: string): string | null {
-  const trimmed = line.replace(/^\s+/, '');
-  if (!trimmed.startsWith(TOOL_CALL_PREFIX)) {
-    return null;
-  }
-  return trimmed.slice(TOOL_CALL_PREFIX.length);
-}
-
-/** Drop a trailing ``` fence so fenced JSON still parses. */function stripTrailingFence(value: string): string {
-  const trimmed = value.trim();
-  return trimmed.endsWith('```') ? trimmed.slice(0, -3).trim() : trimmed;
-}
-
 export interface ExtractedToolCall {
   name: string;
   arguments: Record<string, unknown>;
 }
 
 /**
- * Parse the first TOOL_CALL marker line in the model text.
+ * Parse the first TOOL_CALL marker line in the model text. Both the canonical
+ * JSON form and the natural shorthand (`TOOL_CALL: skill {"id":"docx"}`) are
+ * accepted; see src/toolCallMarker.ts.
  *
  * Returns null when there is no marker, the JSON does not parse, the shape
  * is invalid, or the name is not among `allowedNames` (a hallucinated tool
@@ -487,39 +475,7 @@ export function extractToolCall(
   text: string,
   allowedNames?: readonly string[],
 ): ExtractedToolCall | null {
-  const allow = allowedNames ? new Set(allowedNames) : null;
-  for (const line of text.split('\n')) {
-    const remainder = markerRemainder(line);
-    if (remainder === null) {
-      continue;
-    }
-    // The first marker line decides the turn: failure here is null, not "keep scanning".
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(stripTrailingFence(remainder));
-    } catch {
-      return null;
-    }
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      return null;
-    }
-    const record = parsed as Record<string, unknown>;
-    if (typeof record['name'] !== 'string' || record['name'].length === 0) {
-      return null;
-    }
-    if (allow && !allow.has(record['name'])) {
-      return null;
-    }
-    if (record['arguments'] === undefined) {
-      return { name: record['name'], arguments: {} };
-    }
-    const args = record['arguments'];
-    if (typeof args !== 'object' || args === null || Array.isArray(args)) {
-      return null;
-    }
-    return { name: record['name'], arguments: args as Record<string, unknown> };
-  }
-  return null;
+  return parseToolCallMarker(text, allowedNames);
 }
 
 /**
@@ -558,13 +514,24 @@ export function stripDanglingMarker(text: string): string {
  * - a dangling (incomplete) marker tail at turn end is suppressed, matching
  *   `stripDanglingMarker` hygiene.
  */
+function isJsonObject(value: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed);
+  } catch {
+    return false;
+  }
+}
+
 export class MarkerSafeStreamBuffer {
   private pending = '';
   private suppressed = false;
+  private suppressedText = '';
 
   /** Consume one raw delta; returns the marker-safe content to emit now. */
   consume(delta: string): string {
     if (this.suppressed) {
+      this.suppressedText += delta;
       return '';
     }
     this.pending += delta;
@@ -575,6 +542,7 @@ export class MarkerSafeStreamBuffer {
       this.pending = this.pending.slice(newlineIndex + 1);
       if (this.isMarkerLine(line)) {
         this.suppressed = true;
+        this.suppressedText = `${line}\n${this.pending}`;
         this.pending = '';
         return out;
       }
@@ -591,20 +559,37 @@ export class MarkerSafeStreamBuffer {
 
   /**
    * Remainder to emit once the turn text is complete: '' when a marker was
-   * seen or the tail is a (dangling) marker fragment; otherwise the tail.
+   * relayed as a valid tool call; otherwise the suppressed marker text (so a
+   * malformed marker never turns the turn into a silent empty response), plus
+   * the normal tail when no marker was seen.
    */
   finalRemainder(): string {
     if (this.suppressed) {
-      return '';
+      const suppressed = this.suppressedText + this.pending;
+      this.suppressedText = '';
+      this.pending = '';
+      return suppressed;
     }
     if (this.pending === '') {
       return '';
     }
-    if (this.isMarkerLine(this.pending) || this.couldBecomeMarker(this.pending)) {
-      return '';
-    }
     const tail = this.pending;
     this.pending = '';
+    if (this.isMarkerLine(tail)) {
+      const remainder = markerRemainder(tail);
+      if (remainder !== null) {
+        const trimmed = stripTrailingFence(remainder).trim();
+        // Bare marker or truncated JSON: marker hygiene, not an answer.
+        if (trimmed === '') {
+          return '';
+        }
+        if (trimmed.startsWith('{') && !isJsonObject(trimmed)) {
+          return '';
+        }
+      }
+    }
+    // A complete but unrecognized marker (or a normal tail) is preserved: an
+    // invalid marker must never silently empty the turn.
     return tail;
   }
 
@@ -1897,7 +1882,7 @@ export function buildApp(options: BridgeOptions = {}): FastifyInstance {
 
         // Success: ledger advances to the full incoming history; the assistant
         // response becomes the provisional tail the next echo confirms.
-        confirmTurn(branch, digests, outcome.text, provisionalDigestForResponse(outcome.text));
+        confirmTurn(branch, digests, outcome.text, provisionalDigestForResponse(outcome.text, toolNames));
         branch.systemDigest = sysD;
         record.inflightMarkers = record.inflightMarkers.filter(
           (marker) => marker.branchID !== branch.branchID || marker.deltaDigest !== turnDigest,

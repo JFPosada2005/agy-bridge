@@ -6,6 +6,7 @@
 // cause false divergence. Pure functions, exported for unit tests.
 
 import { createHash } from 'node:crypto';
+import { parseToolCallMarker } from './toolCallMarker';
 
 /** sha1 hex of a string (node:crypto only, no new deps). */
 export function sha1Hex(value: string): string {
@@ -204,36 +205,22 @@ export function systemDigest(messages: unknown[]): string {
   return sha1Hex(systemForms.join('\n'));
 }
 
-const TOOL_CALL_PREFIX = 'TOOL_CALL:';
-
 /**
  * Digest of OUR assistant response in the canonical form opencode will echo
  * it back as: plain text -> `assistant:<text>`; a TOOL_CALL marker turn ->
  * the assistant tool_calls form (ids excluded). Best-effort: unparsable
- * markers fall back to normalized text.
+ * markers fall back to normalized text. Accepts the same canonical and
+ * shorthand marker forms as the request relay.
  */
-export function provisionalDigestForResponse(text: string): string {
-  for (const line of text.split('\n')) {
-    const trimmed = line.replace(/^\s+/, '');
-    if (!trimmed.startsWith(TOOL_CALL_PREFIX)) {
-      continue;
-    }
-    const remainder = trimmed.slice(TOOL_CALL_PREFIX.length).trim().replace(/```$/, '').trim();
-    try {
-      const parsed: unknown = JSON.parse(remainder);
-      if (isRecord(parsed) && typeof parsed['name'] === 'string' && parsed['name']) {
-        const args = parsed['arguments'] === undefined ? {} : parsed['arguments'];
-        if (args !== null && typeof args === 'object' && !Array.isArray(args)) {
-          return sha1Hex(`assistant:calls tool ${parsed['name']} with arguments ${canonicalJson(args)}`);
-        }
-        if (parsed['arguments'] === undefined) {
-          return sha1Hex(`assistant:calls tool ${parsed['name']} with arguments {}`);
-        }
-      }
-    } catch {
-      // Fall through to the text fallback below.
-    }
-    break;
+export function provisionalDigestForResponse(
+  text: string,
+  allowedNames?: readonly string[],
+): string {
+  const call = parseToolCallMarker(text, allowedNames);
+  if (call) {
+    return sha1Hex(
+      `assistant:calls tool ${call.name} with arguments ${canonicalJson(call.arguments)}`,
+    );
   }
   const body = normalizeWhitespace(text);
   return sha1Hex(body ? `assistant:${body}` : 'assistant:(empty)');

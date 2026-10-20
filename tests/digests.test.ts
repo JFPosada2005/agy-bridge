@@ -258,4 +258,24 @@ describe('provisionalDigestForResponse', () => {
     ])[0];
     expect(provisionalDigestForResponse(text)).toBe(echoed);
   });
+
+  it('matches the canonical digest for the shorthand marker (Gemini form)', () => {
+    const shorthand = 'TOOL_CALL: skill {"id": "docx"}';
+    const canonical = 'TOOL_CALL: {"name": "skill", "arguments": {"id": "docx"}}';
+    const echoed = messageDigests([
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call_zzz',
+            type: 'function',
+            function: { name: 'skill', arguments: '{"id":"docx"}' },
+          },
+        ],
+      },
+    ])[0];
+    expect(provisionalDigestForResponse(shorthand, ['skill'])).toBe(echoed);
+    expect(provisionalDigestForResponse(canonical, ['skill'])).toBe(echoed);
+  });
 });
